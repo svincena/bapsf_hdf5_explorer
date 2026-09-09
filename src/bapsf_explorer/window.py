@@ -10,7 +10,7 @@ import pyqtgraph as pg
 
 from .analysis import filter_signal, subtract_baseline
 from .data import acquisition_reshape, demo_data, motion_reshape
-from .reader import inspect_file, read_channel
+from .reader import inspect_file, load_channel_data
 from .theme import STYLESHEET
 
 
@@ -338,6 +338,7 @@ class ExplorerWindow(Q.QMainWindow):
 
     def catalog_loaded(self, catalog):
         self.catalog = catalog
+        self._previous_channel = None
         self.channels.blockSignals(True)
         self.channels.clear()
         for ch in catalog.channels:
@@ -359,15 +360,27 @@ class ExplorerWindow(Q.QMainWindow):
         ch = self.channels.currentData()
         if ch is None:
             return
+        previous = getattr(self, "_previous_channel", None)
+        old_rows = (self.row_start.value(), self.row_stop.value())
+        old_samples = (self.sample_start.value(), self.sample_stop.value())
         self.channel_name.setText(ch.label)
         for field in (self.row_start, self.row_stop):
             field.setMaximum(ch.records)
         for field in (self.sample_start, self.sample_stop):
             field.setMaximum(ch.samples)
-        self.row_start.setValue(0)
-        self.row_stop.setValue(min(50, ch.records))
-        self.sample_start.setValue(0)
-        self.sample_stop.setValue(ch.samples)
+        for start, stop, old, total, prior_total in (
+            (self.row_start, self.row_stop, old_rows, ch.records, previous.records if previous else None),
+            (self.sample_start, self.sample_stop, old_samples, ch.samples, previous.samples if previous else None),
+        ):
+            # A full-range selection follows the new channel's own length.
+            # Valid custom ranges survive channel changes.
+            if previous is None or old == (0, prior_total) or not 0 <= old[0] < old[1] <= total:
+                start.setValue(0)
+                stop.setValue(total)
+            else:
+                start.setValue(old[0])
+                stop.setValue(old[1])
+        self._previous_channel = ch
         self.update_estimate()
 
     def all_records(self):
@@ -393,7 +406,14 @@ class ExplorerWindow(Q.QMainWindow):
                       motion=self.motion.currentData(),
                       position_source="target" if self.position_source.currentIndex() == 0 else "measured",
                       name=self.channel_name.text().strip() or ch.label)
-        self.run_task("Reading channel and matching motion shots…", lambda: read_channel(path, ch, **kwargs), self.raw_loaded)
+        self.run_task("Reading channel and deriving motion dimensions…",
+                      lambda: load_channel_data(path, ch, **kwargs), self.channel_loaded)
+
+    def channel_loaded(self, result):
+        raw, shaped = result
+        self.layout_mode.setCurrentText("Motion coordinates" if "motion_axes" in raw.attrs else "Acquisition order")
+        self.motion_axes.clear()
+        self.raw_loaded(raw, prepared=shaped)
 
     def load_demo(self):
         self.run_task("Generating synthetic scan…", demo_data, self.demo_loaded)
@@ -406,9 +426,10 @@ class ExplorerWindow(Q.QMainWindow):
         self.install_data()
         self.plots.setCurrentIndex(1)
 
-    def raw_loaded(self, raw):
-        self.raw = self.base = self.data = raw
-        self.dimensions.setText(f"shot={raw.sizes['record']}")
+    def raw_loaded(self, raw, prepared=None):
+        self.raw = raw
+        self.base = self.data = raw if prepared is None else prepared
+        self.dimensions.setText("" if "motion_axes" in raw.attrs else f"shot={raw.sizes['record']}")
         self.case_coordinate.clear()
         self.case_coordinate.addItem("None", None)
         for name in raw.coords:
@@ -423,7 +444,9 @@ class ExplorerWindow(Q.QMainWindow):
         self.analysis_note.setText("Original data. No analysis applied.")
         self.install_data()
         unmatched = raw.attrs.get("unmatched_records", 0)
-        self.statusBar().showMessage(f"Loaded {raw.sizes['record']:,} records • {unmatched} requested records unmatched to motion • use Dimensions to group shots.")
+        total = raw.attrs.get("channel_records", raw.sizes['record'])
+        shape = " × ".join(f"{d}={n}" for d, n in self.data.sizes.items())
+        self.statusBar().showMessage(f"Loaded {raw.sizes['record']:,} / {total:,} channel records • {unmatched} unmatched • {shape}")
 
     def reshape_data(self):
         if self.raw is None:

@@ -77,9 +77,14 @@ def motion_reshape(raw, axes=None, *, decimals=4, cases=None, max_bytes=512 * 10
     if raw.dims != ("record", "time"):
         raise ValueError("Motion grouping requires original (record, time) data.")
     if axes is None:
-        axes = [a for a in ("y", "x", "z") if a in raw.coords
-                and np.isfinite(raw[a]).all() and np.unique(np.round(raw[a].values, decimals)).size > 1]
+        if "motion_axes" in raw.attrs:
+            axes = json.loads(raw.attrs["motion_axes"])
+        else:
+            axes = [a for a in ("y", "x", "z") if a in raw.coords
+                    and np.isfinite(raw[a]).all() and np.unique(np.round(raw[a].values, decimals)).size > 1]
     axes = list(axes)
+    if not axes and cases is None and "motion_axes" in raw.attrs:
+        return acquisition_reshape(raw, {"shot": raw.sizes["record"]})
     if not axes or len(set(axes)) != len(axes) or any(a in ("record", "time", "shot", "case", "shot_id") for a in axes):
         raise ValueError("Choose distinct varying spatial coordinates for motion grouping.")
     vectors = []

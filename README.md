@@ -41,16 +41,22 @@ application; a bundled `.app`/`.exe` installer is not included yet.
 
 1. **Open HDF5**. Source lists active digitizer channels and their `Data type`
    labels. Change **Display name** before loading to override a label.
-2. Select the row/sample range. The initial preview reads up to **50 records**
+2. Select the row/sample range. The initial selection covers **all channel records**
    with the full time window. Stops are exclusive and indices are zero-based.
-   **Use all records** selects the complete channel. A single-channel read is
+   Custom ranges are preserved when switching compatible channels; full ranges
+   follow the new channel's length. **Use all records** restores the complete channel. A single-channel read is
    limited to 512 MiB of signal data; processing requires additional memory.
 3. Choose the motion device/configuration and **Target grid** or **Measured
    positions**, then **Load channel**. Matching uses bapsflib's shot intersection;
    the status bar reports requested records omitted because they did not match.
-4. In **Dimensions**, choose **Motion coordinates** and **Apply dimensions**.
-   Leave axes blank to use varying x/y/z coordinates, or enter an explicit order
-   such as `y,x`. Repeated visits become the `shot` dimension.
+4. Loading automatically reconstructs motion dimensions and repeat counts for
+   the selected channel. With no motion selected, records become `(shot, time)`.
+   **Dimensions → Apply dimensions** is now an optional override. Leave axes
+   blank to use scan axes identified from the full motion configuration's target
+   coordinates (measured coordinates if targets are unavailable), or enter an
+   explicit order such as `y,x`. Repeated visits become the `shot` dimension.
+   Partial reads show only loaded positions and repeats, not the entire scan;
+   the status bar reports loaded versus total channel records.
 5. Use the selection controls to choose position, case, and individual shot or
    shot mean. The time trace is the selected point; spatial plots span the chosen
    horizontal/vertical axes and retain the other selections. Choose vertical
@@ -96,6 +102,10 @@ digitizer volts; probe-specific calibration is not inferred from channel names.
   positions. Rounding (default 4 decimal places in the coordinate's native unit)
   determines which positions are equal. Choose axes explicitly when working
   with measured positions affected by off-axis jitter.
+  Automatic axis detection uses targets even when plotting measured coordinates,
+  so an x-line does not become an x–y grid because of off-axis deviations.
+  Within-axis measured jitter can still split repeat groups at the chosen
+  precision; use target coordinates to reproduce the requested grid exactly.
 - Missing cells/repeats contain NaN and `shot_id=-1`. Means skip missing values;
   no interpolation is performed. Large sparse Cartesian grids are rejected by
   an allocation guard.

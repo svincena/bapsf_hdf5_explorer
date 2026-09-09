@@ -8,7 +8,7 @@ import numpy as np
 from bapsflib import lapd
 from bapsflib._hdf.maps.controls.types import ConType
 
-from .data import record_array
+from .data import record_array, motion_reshape, acquisition_reshape
 
 
 @dataclass(frozen=True)
@@ -84,7 +84,7 @@ def inspect_file(path):
                             specs = file.get_digitizer_specs(board, number, digitizer=name, adc=adc, config_name=config)
                             channels.append(Channel(name, config, adc, int(board), int(number),
                                 _channel_label(file, mapper, config, adc, board, number, specs),
-                                int(specs["nshotnum"]), int(specs["nt"])))
+                                int(file[specs["device dataset path"]].shape[0]), int(specs["nt"])))
         for name, mapper in file.controls.items():
             if mapper.contype == ConType.MOTION:
                 motions.extend((name, config) for config in mapper.configs)
@@ -104,7 +104,7 @@ def _position_units(control_config):
 
 def read_channel(path, channel, *, rows=None, samples=None, motion=None,
                  position_source="target", name=None, max_bytes=512 * 1024**2):
-    rows = rows or slice(0, min(channel.records, 50))
+    rows = rows or slice(0, channel.records)
     samples = samples or slice(0, channel.samples)
     if position_source not in ("target", "measured"):
         raise ValueError("Position source must be target or measured.")
@@ -143,6 +143,7 @@ def read_channel(path, channel, *, rows=None, samples=None, motion=None,
         if not len(data):
             raise ValueError("No digitizer shots matched the selected motion configuration.")
         positions = {}
+        motion_axes = None
         position_units = "native"
         if motion:
             config = file.controls[motion[0]].configs[motion[1]]
@@ -151,6 +152,20 @@ def read_channel(path, channel, *, rows=None, samples=None, motion=None,
             if source not in data.dtype.names:
                 raise ValueError("This motion device has no target coordinates; choose measured positions.")
             fields = config.get("state values", {}).get(source, {}).get("dset field", ())
+            # Use the complete motion configuration to identify scan axes,
+            # even if the selected channel read contains just one position.
+            controls = file.read_controls([motion])
+            axis_source = "xyz_target" if "xyz_target" in controls.dtype.names else "xyz"
+            axis_fields = config.get("state values", {}).get(axis_source, {}).get("dset field", ())
+            motion_axes = []
+            for axis in ("y", "x", "z"):
+                i = "xyz".index(axis)
+                if axis_fields and (len(axis_fields) <= i or not axis_fields[i]):
+                    continue
+                values = np.asarray(controls[axis_source])[:, i]
+                values = values[np.isfinite(values)]
+                if np.unique(np.round(values, 4)).size > 1:
+                    motion_axes.append(axis)
             for i, axis in enumerate("xyz"):
                 if fields and (len(fields) <= i or not fields[i]):
                     continue
@@ -164,9 +179,22 @@ def read_channel(path, channel, *, rows=None, samples=None, motion=None,
                  "adc": channel.adc, "board": channel.board, "channel": channel.channel,
                  "dataset_path": specs["device dataset path"], "position_source": position_source,
                  "motion": str(motion), "requested_records": count,
+                 "channel_records": channel.records,
                  "unmatched_records": count - len(data),
                  "read_selection": json.dumps({"rows": [rows.start, rows.stop], "samples": [samples.start, samples.stop]}),
                  "scaling": "bapsflib keep_bits=False; no probe calibration applied",
                  "history": "[]"}
+        if motion_axes is not None:
+            attrs["motion_axes"] = json.dumps(motion_axes)
         return record_array(np.asarray(data["signal"]), time, np.asarray(data["shotnum"]),
                             positions=positions, name=name or channel.label, attrs=attrs)
+
+
+def load_channel_data(path, channel, **kwargs):
+    """Read and derive dimensions together, suitable for a GUI worker task."""
+    raw = read_channel(path, channel, **kwargs)
+    if "motion_axes" in raw.attrs:
+        shaped = motion_reshape(raw)
+    else:
+        shaped = acquisition_reshape(raw, {"shot": raw.sizes["record"]})
+    return raw, shaped

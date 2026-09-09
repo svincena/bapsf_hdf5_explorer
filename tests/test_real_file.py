@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from bapsflib import lapd
 
-from bapsf_explorer.reader import inspect_file, read_channel
+from bapsf_explorer.reader import inspect_file, read_channel, load_channel_data
 from bapsf_explorer.data import motion_reshape
 
 
@@ -41,3 +41,23 @@ def test_all_channels_full_time_trace(catalog):
         assert np.isfinite(raw.values).all()
         assert raw.attrs["units"] == "V"
         assert raw.time.values[-1] == pytest.approx((139264 - 1) * 20e-9)
+
+
+def test_measured_positions_do_not_invent_off_axis_scan(catalog):
+    raw, grid = load_channel_data(catalog.path, catalog.channels[0],
+                                 samples=slice(0, 64), motion=catalog.motions[0],
+                                 position_source="measured")
+    assert raw.attrs["motion_axes"] == '["x"]'
+    # Measured x has genuine within-position jitter; grouping honors the
+    # requested precision instead of silently replacing it with target x.
+    assert dict(grid.sizes) == {"x": len(np.unique(np.round(raw.x.values, 4))), "shot": 5, "time": 64}
+    assert np.count_nonzero(grid.shot_id.values != -1) == 455
+    assert "measured_y" in grid.coords
+    assert np.nanmax(grid.measured_y.values) - np.nanmin(grid.measured_y.values) > 0
+
+
+def test_no_motion_load_has_a_true_shot_dimension(catalog):
+    raw, grid = load_channel_data(catalog.path, catalog.channels[0],
+                                 rows=slice(0, 7), samples=slice(0, 64))
+    assert dict(grid.sizes) == {"shot": 7, "time": 64}
+    np.testing.assert_array_equal(grid.shot_id, raw.shot_id)

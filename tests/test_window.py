@@ -80,3 +80,43 @@ def test_raw_record_mean_and_trace_autorange(app):
     window.shot_mode.setCurrentIndex(1)
     np.testing.assert_allclose(window.trace.yData, [50.5, 101., 151.5])
     window.close()
+
+
+def test_real_channel_switching_automatically_groups_motion(app):
+    from bapsf_explorer.reader import inspect_file
+    path = os.environ.get("BAPSF_TEST_FILE")
+    if not path:
+        pytest.skip("Set BAPSF_TEST_FILE for the supplied x-line scan")
+    window = ExplorerWindow()
+    errors = []
+    window.error = errors.append
+    window.catalog_loaded(inspect_file(path))
+    assert window.row_stop.value() == 455
+    assert window.sample_stop.value() == 139264
+    # Shorten only the time window; use all positions on every channel.
+    window.sample_start.setValue(100)
+    window.sample_stop.setValue(2148)
+    for i, name in enumerate(("Isat", "Isweep", "Vsweep")):
+        window.channels.setCurrentIndex(i)
+        assert window.row_stop.value() == 455
+        assert window.sample_start.value() == 100
+        assert window.sample_stop.value() == 2148
+        window.load_channel()
+        wait_task(app, window)
+        assert not errors
+        assert window.data.name == name
+        assert dict(window.data.sizes) == {"x": 91, "shot": 5, "time": 2048}
+        assert set(window.selectors) == {"x", "shot"}
+        assert window.selectors["shot"][0].maximum() == 4
+        np.testing.assert_array_equal(window.data.shot_id.values.ravel(), np.arange(1, 456))
+    # Loading a subset must retain the scan axis, but show only loaded repeats.
+    window.row_start.setValue(1)
+    window.row_stop.setValue(4)
+    window.channels.setCurrentIndex(0)
+    assert (window.row_start.value(), window.row_stop.value()) == (1, 4)
+    window.load_channel()
+    wait_task(app, window)
+    assert not errors
+    assert dict(window.data.sizes) == {"x": 1, "shot": 3, "time": 2048}
+    np.testing.assert_array_equal(window.data.shot_id.values.ravel(), [2, 3, 4])
+    window.close()

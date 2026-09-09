@@ -61,3 +61,11 @@ def test_export_roundtrip(tmp_path):
     grid.to_netcdf(path, engine="h5netcdf")
     with xr.open_dataarray(path, engine="h5netcdf") as reopened:
         xr.testing.assert_identical(grid, reopened.load())
+
+
+def test_stationary_motion_configuration_becomes_shots():
+    raw = record_array(np.ones((3, 2)), [0, 1], [10, 11, 12],
+                       positions={"x": [2, 2, 2]}, attrs={"motion_axes": "[]"})
+    grid = motion_reshape(raw)
+    assert dict(grid.sizes) == {"shot": 3, "time": 2}
+    np.testing.assert_array_equal(grid.shot_id, [10, 11, 12])
