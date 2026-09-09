@@ -12,6 +12,8 @@ QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 5px; color:
 QPushButton { background: #243342; border: 1px solid #364a5e; padding: 8px 12px; border-radius: 6px; font-weight: 600; }
 QPushButton:hover { background: #30465a; border-color: #64839c; }
 QPushButton:pressed { background: #38566b; }
+QPushButton#plotTool { padding: 5px 9px; font-size: 12px; }
+QPushButton#plotTool:checked { background: #28575d; color: #6fe4d4; border-color: #41c6b6; }
 QPushButton#primary { background: #41c6b6; color: #0c2425; border: none; }
 QPushButton#primary:hover { background: #65decf; }
 QPushButton:disabled { color: #5f7182; background: #1c2732; border-color: #293745; }

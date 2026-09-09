@@ -82,6 +82,41 @@ def test_raw_record_mean_and_trace_autorange(app):
     window.close()
 
 
+def test_time_and_spatial_navigation_controls(app):
+    import pyqtgraph as pg
+
+    window = ExplorerWindow()
+    window.demo_loaded(demo_data())
+    app.processEvents()
+
+    time_view = window.wave.getViewBox()
+    window.time_navigation.rect_button.click()
+    assert time_view.state["mouseMode"] == pg.ViewBox.RectMode
+    window.time_navigation.pan_button.click()
+    assert time_view.state["mouseMode"] == pg.ViewBox.PanMode
+
+    time_view.setRange(xRange=(0.2, 0.4), yRange=(-0.1, 0.1), padding=0)
+    before = time_view.viewRange()
+    window.time_navigation.zoom_in_button.click()
+    after = time_view.viewRange()
+    assert after[0][1] - after[0][0] < before[0][1] - before[0][0]
+    window.time_navigation.zoom_out_button.click()
+    window.time_navigation.reset_button.click()
+    reset = time_view.viewRange()
+    assert reset[0][0] <= 0
+    assert reset[0][1] >= window.data.time.values[-1] * 1000
+
+    spatial_view = window.spatial_plot.getViewBox()
+    spatial_view.setRange(xRange=(-2, 2), yRange=(-2, 2), padding=0)
+    window.spatial_navigation.reset_button.click()
+    spatial_reset = spatial_view.viewRange()
+    assert spatial_reset[0][0] <= float(window.data.x.min())
+    assert spatial_reset[0][1] >= float(window.data.x.max())
+    assert spatial_reset[1][0] <= float(window.data.y.min())
+    assert spatial_reset[1][1] >= float(window.data.y.max())
+    window.close()
+
+
 def test_real_channel_switching_automatically_groups_motion(app):
     from bapsf_explorer.reader import inspect_file
     path = os.environ.get("BAPSF_TEST_FILE")

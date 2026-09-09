@@ -60,7 +60,11 @@ application; a bundled `.app`/`.exe` installer is not included yet.
 5. Use the selection controls to choose position, case, and individual shot or
    shot mean. The time trace is the selected point; spatial plots span the chosen
    horizontal/vertical axes and retain the other selections. Choose vertical
-   **None** for a 1D profile. Wheel zoom and drag pan are available in the plots.
+   **None** for a 1D profile. Each time and spatial plot has **Pan**, **Box zoom**,
+   **Zoom in**, **Zoom out**, and **Reset view** controls. The mouse wheel zooms;
+   the selected navigation mode controls left-button dragging. Right-click opens
+   pyqtgraph's axis-specific plot menu. Reset fits the current data; on a locked
+   1D animation it also restores the full animation amplitude range.
 6. Drag the time slider or the gold time-trace cursor. **Play** animates spatial
    profiles; **Samples/frame** controls temporal stride for display only.
    Locking the scale keeps a consistent range throughout an animation.

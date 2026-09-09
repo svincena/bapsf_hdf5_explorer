@@ -59,6 +59,83 @@ def edges(values):
                  (values[:-1] + values[1:]) / 2, values[-1] + (values[-1] - values[-2]) / 2]
 
 
+def finite_range(values, fallback=(0.0, 1.0)):
+    """Return a nonzero finite range suitable for ViewBox.setRange."""
+    values = np.asarray(values)
+    values = values[np.isfinite(values)]
+    if not values.size:
+        return fallback
+    low, high = float(np.min(values)), float(np.max(values))
+    if low == high:
+        margin = max(abs(low) * 0.05, 0.5)
+        return low - margin, high + margin
+    return low, high
+
+
+class PlotNavigation(Q.QWidget):
+    """Compact, explicit controls for a pyqtgraph ViewBox."""
+
+    def __init__(self, view_box, reset_callback, parent=None):
+        super().__init__(parent)
+        self.view_box = view_box
+        self.reset_callback = reset_callback
+        layout = Q.QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addWidget(Q.QLabel("Navigate"))
+
+        self.pan_button = self._mode_button(
+            "Pan", "Drag with the left mouse button to pan the plot."
+        )
+        self.rect_button = self._mode_button(
+            "Box zoom", "Drag a rectangle with the left mouse button to zoom into it."
+        )
+        self.mode_group = Q.QButtonGroup(self)
+        self.mode_group.setExclusive(True)
+        self.mode_group.addButton(self.pan_button)
+        self.mode_group.addButton(self.rect_button)
+        self.pan_button.toggled.connect(
+            lambda checked: checked and self.view_box.setMouseMode(pg.ViewBox.PanMode)
+        )
+        self.rect_button.toggled.connect(
+            lambda checked: checked and self.view_box.setMouseMode(pg.ViewBox.RectMode)
+        )
+        self.pan_button.setChecked(True)
+
+        self.zoom_in_button = button("Zoom in", lambda: self.zoom(0.8))
+        self.zoom_in_button.setToolTip("Zoom in around the center of the current view.")
+        self.zoom_out_button = button("Zoom out", lambda: self.zoom(1.25))
+        self.zoom_out_button.setToolTip("Zoom out around the center of the current view.")
+        self.reset_button = button("Reset view", self.reset_callback)
+        self.reset_button.setToolTip("Fit the complete current dataset in the plot.")
+        for widget in (
+            self.pan_button,
+            self.rect_button,
+            self.zoom_in_button,
+            self.zoom_out_button,
+            self.reset_button,
+        ):
+            widget.setObjectName("plotTool")
+            layout.addWidget(widget)
+        layout.addStretch()
+        hint = note("Wheel: zoom • right-click: plot options")
+        hint.setToolTip(
+            "The right-click menu also provides axis-specific range and mouse controls."
+        )
+        layout.addWidget(hint)
+
+    @staticmethod
+    def _mode_button(text, tooltip):
+        widget = Q.QPushButton(text)
+        widget.setCheckable(True)
+        widget.setToolTip(tooltip)
+        return widget
+
+    def zoom(self, factor):
+        """Scale both visible axes around the current view center."""
+        self.view_box.scaleBy((factor, factor))
+
+
 class ExplorerWindow(Q.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -127,6 +204,10 @@ class ExplorerWindow(Q.QMainWindow):
         main.addWidget(self.selection_box)
         self.plots = Q.QTabWidget()
         main.addWidget(self.plots, 1)
+        time_page = Q.QWidget()
+        time_layout = Q.QVBoxLayout(time_page)
+        time_layout.setContentsMargins(8, 8, 8, 8)
+        time_layout.setSpacing(7)
         self.wave = pg.PlotWidget()
         self.wave.showGrid(x=True, y=True, alpha=.15)
         self.wave.addLegend(offset=(12, 12))
@@ -138,7 +219,10 @@ class ExplorerWindow(Q.QMainWindow):
         self.cursor = pg.InfiniteLine(angle=90, movable=True, pen=pg.mkPen("#e8b768", width=1))
         self.cursor.sigPositionChangeFinished.connect(self.cursor_moved)
         self.wave.addItem(self.cursor, ignoreBounds=True)
-        self.plots.addTab(self.wave, "Time traces")
+        self.time_navigation = PlotNavigation(self.wave.getViewBox(), self.reset_time_view)
+        time_layout.addWidget(self.time_navigation)
+        time_layout.addWidget(self.wave, 1)
+        self.plots.addTab(time_page, "Time traces")
         spatial_page = Q.QWidget()
         spatial_layout = Q.QVBoxLayout(spatial_page)
         axes_row = Q.QHBoxLayout()
@@ -157,6 +241,10 @@ class ExplorerWindow(Q.QMainWindow):
         self.spatial = pg.GraphicsLayoutWidget()
         self.spatial_plot = self.spatial.addPlot()
         self.spatial_plot.showGrid(x=True, y=True, alpha=.12)
+        self.spatial_navigation = PlotNavigation(
+            self.spatial_plot.getViewBox(), self.reset_spatial_view
+        )
+        spatial_layout.addWidget(self.spatial_navigation)
         self.profile = self.spatial_plot.plot(pen=pg.mkPen("#56dbc7", width=2), symbol="o", symbolSize=5,
                                               symbolBrush="#56dbc7")
         self.mesh = pg.PColorMeshItem(colorMap=pg.colormap.get("viridis"), enableAutoLevels=False)
@@ -579,7 +667,40 @@ class ExplorerWindow(Q.QMainWindow):
         current_axes = (x, y)
         if current_axes != self._spatial_axes:
             self._spatial_axes = current_axes
-            self.spatial_plot.autoRange()
+            self.reset_spatial_view()
+
+    def reset_time_view(self):
+        """Fit the selected trace without allowing the time cursor to affect bounds."""
+        if self.data is None:
+            return
+        trace = self.selection(self.data)
+        plotted = [trace.values]
+        if self.data is not self.base:
+            plotted.append(self.selection(self.base).values)
+        self.wave.getViewBox().setRange(
+            xRange=finite_range(trace.time.values * 1000),
+            yRange=finite_range(np.concatenate(plotted)),
+            padding=0.04,
+        )
+
+    def reset_spatial_view(self):
+        """Fit the spatial domain and honor the animation scale for 1D profiles."""
+        if self._plot_cache is None:
+            return
+        spatial, keep, limits = self._plot_cache
+        view_box = self.spatial_plot.getViewBox()
+        x_range = finite_range(spatial[keep[0]].values)
+        if len(keep) == 1:
+            if self.lock_scale.isChecked():
+                y_range = limits
+            else:
+                _, visible = self.profile.getData()
+                y_range = finite_range(visible)
+        else:
+            # The colored cells extend halfway beyond their coordinate centers.
+            x_range = finite_range(edges(spatial[keep[0]].values))
+            y_range = finite_range(edges(spatial[keep[1]].values))
+        view_box.setRange(xRange=x_range, yRange=y_range, padding=0.04)
 
     def update_frame(self, *_):
         if self.data is None or self._updating:
