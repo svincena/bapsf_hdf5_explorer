@@ -35,6 +35,8 @@ class ImportDialog(W.QDialog):
     def __init__(self, path, info, parent=None):
         super().__init__(parent)
         self.path, self.info, self.dataset, self.worker = path, info, None, None
+        self.guess_worker = None
+        self.guess_pending = False
         self.setWindowTitle("Import acquisition")
         self.resize(780, 760)
         layout = W.QVBoxLayout(self)
@@ -71,8 +73,8 @@ class ImportDialog(W.QDialog):
         self.position_source = combo(["Target if available", "Measured positions"])
         form.addRow("Position coordinates", self.position_source)
         self.cases, self.repeats = spin(1, value=1), spin(1, value=1)
-        form.addRow("Cases per position", self.cases)
-        form.addRow("Stored repeats per case", self.repeats)
+        form.addRow("Number of cases", self.cases)
+        form.addRow("Number of shots per case", self.repeats)
         self.order = combo(["case,shot", "shot,case"])
         form.addRow("Per-position order (fastest last)", self.order)
         self.precision = spin(0, 8, 4)
@@ -126,6 +128,72 @@ class ImportDialog(W.QDialog):
         self.load.clicked.connect(self.begin)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        self.guess_timer = C.QTimer(self)
+        self.guess_timer.setSingleShot(True)
+        self.guess_timer.setInterval(200)
+        self.guess_timer.timeout.connect(self.start_guess)
+        self.channels.itemSelectionChanged.connect(self.request_guess)
+        self.motion.currentIndexChanged.connect(self.request_guess)
+        self.mapping.currentIndexChanged.connect(self.request_guess)
+        self.position_source.currentIndexChanged.connect(self.request_guess)
+        self.precision.valueChanged.connect(self.request_guess)
+        self.start.valueChanged.connect(self.request_guess)
+        self.stop.valueChanged.connect(self.request_guess)
+        C.QTimer.singleShot(0, self.request_guess)
+
+    def request_guess(self, *args):
+        """Debounce inputs that change the inferred acquisition layout."""
+        if self.tabs.currentIndex() == 0:
+            self.cases.setValue(1)
+            self.guess_timer.start()
+
+    def start_guess(self):
+        if self.guess_worker and self.guess_worker.isRunning():
+            self.guess_pending = True
+            return
+        selected = self.channels.selectedItems()
+        if not selected:
+            return
+        spec = selected[0].data(C.Qt.UserRole)
+        control = self.motion.currentData() if self.mapping.currentIndex() == 0 else None
+        source = "target" if self.position_source.currentIndex() == 0 else "measured"
+        start, stop = self.start.value(), self.stop.value() or None
+        if stop is not None and stop <= start:
+            return
+        decimals = self.precision.value()
+        self.message.setText("Estimating spatial points and shots from the selected channel…")
+        self.guess_worker = Worker(
+            lambda: io.guess_shots_per_case(
+                self.path, spec, control, start, stop, source, decimals
+            ),
+            self,
+        )
+        self.guess_worker.result.connect(self.guess_ready)
+        self.guess_worker.failed.connect(self.guess_failed)
+        self.guess_worker.finished.connect(self.guess_finished)
+        self.guess_worker.start()
+
+    def guess_ready(self, guess):
+        self.cases.setValue(1)
+        self.repeats.setValue(guess["shots_per_case"])
+        shape = " × ".join(map(str, guess["spatial_shape"])) or "point"
+        self.message.setText(
+            f"Guessed 1 case and {guess['shots_per_case']} shots per case from "
+            f"{guess['records']} records across {guess['spatial_points']} spatial "
+            f"points ({shape}); positions: {guess['position_field']}. You may edit "
+            "the case and shot counts."
+        )
+
+    def guess_failed(self, message):
+        self.message.setText(
+            f"Could not infer shots automatically: {message} Enter the number of "
+            "cases and shots per case manually."
+        )
+
+    def guess_finished(self):
+        if self.guess_pending:
+            self.guess_pending = False
+            self.guess_timer.start()
 
     def add_axis(self):
         row = self.axes.rowCount()
@@ -191,7 +259,8 @@ class ImportDialog(W.QDialog):
         self.load.setEnabled(True)
 
     def reject(self):
-        if self.worker and self.worker.isRunning():
+        if ((self.worker and self.worker.isRunning())
+                or (self.guess_worker and self.guess_worker.isRunning())):
             self.message.setText("The read is still running. Close after it finishes.")
             return
         super().reject()

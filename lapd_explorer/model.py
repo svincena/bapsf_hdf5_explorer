@@ -99,7 +99,7 @@ def preprocess(data, *, average=False, baseline="None", integrate=False, gain=1.
     coords = dict(data.coords)
     shots = data.shot_numbers
     if average and "shot" in dims:
-        steps.append(f"Average {len(coords['shot'])} stored repeats at each position/case")
+        steps.append(f"Average {len(coords['shot'])} shots at each position/case")
         dims = tuple(d for d in dims if d != "shot")
         coords.pop("shot")
         shots = None

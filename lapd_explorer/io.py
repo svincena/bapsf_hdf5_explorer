@@ -45,13 +45,76 @@ def inspect_file(path):
     return dict(portable=False, channels=channels, controls=controls, datasets=datasets, error=error)
 
 
+def infer_shots_from_positions(xyz, decimals=4):
+    """Return ``(shots_per_case, spatial_points, spatial_shape)``.
+
+    The inference assumes one case.  A spatial point must occur the same number
+    of times as every other point, and the positions must form a complete point,
+    line, or rectangular plane after rounding.
+    """
+    xyz = np.asarray(xyz, dtype=float)
+    if xyz.ndim != 2 or xyz.shape[1] != 3 or not len(xyz):
+        raise ValueError("Motion positions must be a nonempty N×3 array.")
+    if not np.all(np.isfinite(xyz)):
+        raise ValueError("Finite motion coordinates are unavailable.")
+    xyz = np.round(xyz, decimals)
+    varying = [axis for axis in range(3) if len(np.unique(xyz[:, axis])) > 1]
+    if len(varying) > 2:
+        raise ValueError("Motion varies in three spatial axes.")
+    if varying:
+        points = xyz[:, varying]
+        unique_points, counts = np.unique(points, axis=0, return_counts=True)
+        spatial_shape = tuple(len(np.unique(xyz[:, axis])) for axis in varying)
+    else:
+        unique_points = np.zeros((1, 0))
+        counts = np.array([len(xyz)])
+        spatial_shape = ()
+    if len(unique_points) != int(np.prod(spatial_shape or (1,))):
+        raise ValueError("Motion positions do not form a complete rectangular grid.")
+    if not np.all(counts == counts[0]):
+        raise ValueError("Spatial points do not contain equal numbers of shots.")
+    return int(counts[0]), len(unique_points), spatial_shape
+
+
+def guess_shots_per_case(path, spec, control=None, start=0, stop=None,
+                         position_source="target", decimals=4):
+    """Infer shots per spatial point while reading only one time sample."""
+    from bapsflib import lapd
+
+    opts = {key: spec[key] for key in ("digitizer", "adc", "config_name")
+            if spec.get(key) != ""}
+    with lapd.File(path, mode="r") as f:
+        records = f.read_data(
+            spec["board"], spec["channel"], **opts,
+            index=slice(start, stop), time_slice=slice(0, 1),
+            add_controls=[tuple(control)] if control else None,
+        )
+    field = ("xyz_target" if position_source == "target"
+             and "xyz_target" in records.dtype.names else "xyz")
+    xyz = np.asarray(records[field], dtype=float)
+    if control is None or not np.all(np.isfinite(xyz)):
+        # Without motion metadata, the only defensible automatic assumption is
+        # a point acquisition.  The user can replace it with manual dimensions.
+        xyz = np.zeros((len(records), 3), dtype=float)
+        field = "none (point assumed)"
+    shots, points, shape = infer_shots_from_positions(xyz, decimals)
+    return {
+        "shots_per_case": shots,
+        "spatial_points": points,
+        "spatial_shape": shape,
+        "records": len(records),
+        "position_field": field,
+    }
+
+
 def read_lapd(path, selections, control=None, start=0, stop=None, t0=0.0, position_source="target"):
     from bapsflib import lapd
     arrays, reference, dt, xyz, infos = {}, None, None, None, {}
     with lapd.File(path, mode="r") as f:
         infos["acquisition"] = dict(f.info)
         for name, spec in selections.items():
-            opts = {k: v for k, v in spec.items() if k not in ("board", "channel") and v != ""}
+            opts = {key: spec[key] for key in ("digitizer", "adc", "config_name")
+                    if spec.get(key) != ""}
             r = f.read_data(spec["board"], spec["channel"], **opts,
                             index=slice(start, stop),
                             add_controls=[tuple(control)] if control else None)
@@ -105,7 +168,7 @@ def map_motion(records, cases=1, repeats=1, repeat_order="case,shot", decimals=4
     coords = {d: np.unique(xyz[:, i]) for d, i in zip(dims, axes)}
     shape = tuple(len(coords[d]) for d in dims)
     if cases < 1 or repeats < 1:
-        raise ValueError("Cases and stored repeats must be positive.")
+        raise ValueError("Cases and shots per case must be positive.")
     expected = int(np.prod(shape)) * cases * repeats
     if expected != len(records.shots):
         raise ValueError(f"Grid requires {expected} records; found {len(records.shots)}. Set cases/repeats explicitly or use manual mapping.")

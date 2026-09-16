@@ -6,6 +6,7 @@ import pytest
 from PySide6 import QtWidgets as W
 from lapd_explorer.app import MainWindow, STYLE, export_mp4, atomic_save
 from lapd_explorer.model import Dataset
+from lapd_explorer.widgets import ImportDialog
 
 
 @pytest.fixture(scope="module")
@@ -67,3 +68,32 @@ def test_atomic_save_preserves_existing_destination_on_failure(tmp_path):
         atomic_save(path, fail)
     assert path.read_bytes() == b"original"
     assert not list(tmp_path.glob(".lapd-*"))
+
+
+def test_import_dialog_applies_shot_guess_and_keeps_fields_editable(app, monkeypatch):
+    info = {
+        "channels": [{"digitizer": "D", "config_name": "cfg", "adc": "A",
+                      "board": 1, "channel": 2}],
+        "controls": [("bmotion", "scan")],
+        "datasets": [],
+    }
+    monkeypatch.setattr(
+        "lapd_explorer.widgets.io.guess_shots_per_case",
+        lambda *args: {"shots_per_case": 5, "spatial_points": 2601,
+                       "spatial_shape": (51, 51), "records": 13005,
+                       "position_field": "xyz_target"},
+    )
+    dialog = ImportDialog("fake.h5", info)
+    dialog.start_guess()
+    while dialog.guess_worker.isRunning():
+        app.processEvents()
+    app.processEvents()
+    assert dialog.cases.value() == 1
+    assert dialog.repeats.value() == 5
+    assert dialog.cases.isEnabled() and dialog.repeats.isEnabled()
+    assert "2601 spatial points" in dialog.message.text()
+    dialog.cases.setValue(3)
+    dialog.repeats.setValue(4)
+    assert (dialog.cases.value(), dialog.repeats.value()) == (3, 4)
+    dialog.guess_timer.stop()
+    dialog.reject()

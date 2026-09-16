@@ -45,7 +45,7 @@ For `04_bdot_port25_xline 2026-09-02 11.39.39.hdf5`:
 1. Click **Open HDF5…** and select the file.
 2. On **BaPSF / bapsflib**, select board **3**, channels **6, 7, 8** with Cmd-click on macOS or Ctrl-click on Windows/Linux.
 3. Select motion control **bmotion / 3 - <Hermes> p25_C16_Nx91_Lx40cm**.
-4. Keep **Motion coordinates**, **Target if available**, **1 case**; set **5 stored repeats per case**.
+4. Keep **Motion coordinates** and **Target if available**. Selecting a channel automatically guesses **1 case** and **5 shots per case**; both values remain editable.
 5. Click **Load acquisition**.
 
 Validated result: `(x=91, shot=5, time=6144)`, x from −20 to +20 cm, global shots 1–455, sample interval 10 ns. The three channels correspond to Bx, By and Bz in the run notes, but the imported amplitudes are **digitizer volts**. Probe/amplifier calibration is required to obtain magnetic field units. Integration alone produces V·s.
@@ -58,7 +58,7 @@ Choose **Average stored shots** and **Remove mean**, then **Apply to original da
 
 ## Verified 2D sample
 
-For `14_bdot_port25_xy_51x51_delta7mm 2026-09-07 10.35.11.hdf5`, select board **3**, channels **6–8**, motion **bmotion / 0 - <Hermes> p25_C16_51x51_deta7mm**, **Target if available**, **1 case** and **5 stored repeats**.
+For `14_bdot_port25_xy_51x51_delta7mm 2026-09-07 10.35.11.hdf5`, select board **3**, channels **6–8**, motion **bmotion / 0 - <Hermes> p25_C16_51x51_deta7mm**, and **Target if available**. The importer fills **1 case** and **5 shots per case**.
 
 The complete file was verified as `(y=51, x=51, shot=5, time=6144)`: 13,005 global shots, 0.7 cm spacing, x/y extents −17.5 to +17.5 cm, and 10 ns sampling. Selected mapped signals and coordinates were compared with direct bapsflib reads. The full GUI import, averaged baseline correction, three-component magnitude, plane arrows, click-selected x/y slices, still export and a four-frame MP4 were exercised.
 
@@ -76,7 +76,7 @@ QT_QPA_PLATFORM=offscreen .venv/bin/python scripts/verify_plane.py '/path/to/pla
 
 ### Motion
 
-Motion grouping requires a complete rectangular grid with the same record count at every position. The user specifies cases and stored repeats per case. Within each position, the acquisition order is mapped according to `case,shot` (shot fastest) or `shot,case` (case fastest). Cases cannot be inferred reliably from position and global shot number alone.
+Motion grouping requires a complete rectangular grid with the same record count at every position. When a digitizer channel is selected, the importer reads one time sample per record, counts the spatial positions, assumes one case, and fills **Number of shots per case** from the repeated records at each position. The user can replace that guess with any valid combination of cases and shots. Within each position, the acquisition order is mapped according to `case,shot` (shot fastest) or `shot,case` (case fastest). Cases cannot be inferred reliably from position and global shot number alone.
 
 Missing grid points, unequal repeats, three-dimensional scans and mismatched vector shot/time axes produce an error. Select a balanced record range or use manual mapping after preparing the appropriate subset. Single case/repeat dimensions are removed; a missing shot axis never creates statistical information.
 

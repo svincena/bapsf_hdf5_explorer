@@ -1,7 +1,10 @@
 import numpy as np
 import pytest
 from lapd_explorer.model import Dataset, preprocess, quantity, spectrum
-from lapd_explorer.io import Records, map_manual, map_motion, save_dataset, load_dataset, read_raw
+from lapd_explorer.io import (
+    Records, infer_shots_from_positions, load_dataset, map_manual, map_motion,
+    read_raw, save_dataset,
+)
 
 
 def point(values, t=None):
@@ -60,6 +63,24 @@ def test_motion_shot_alignment_and_cases():
     assert data.shot_numbers[0, 0, 1, 0] == 109
     alternative = map_motion(rec, cases=2, repeats=2, repeat_order="shot,case")
     assert alternative.shot_numbers[0, 0, 1, 0] == 105
+
+
+def test_infer_shots_from_point_line_and_plane():
+    point = np.zeros((7, 3))
+    assert infer_shots_from_positions(point) == (7, 1, ())
+
+    line = np.repeat(np.column_stack((np.arange(4), np.zeros(4), np.zeros(4))), 3, axis=0)
+    assert infer_shots_from_positions(line) == (3, 4, (4,))
+
+    yy, xx = np.meshgrid(np.arange(2), np.arange(3), indexing="ij")
+    plane = np.repeat(np.column_stack((xx.ravel(), yy.ravel(), np.zeros(6))), 5, axis=0)
+    assert infer_shots_from_positions(plane) == (5, 6, (3, 2))
+
+
+def test_infer_shots_rejects_unbalanced_positions():
+    xyz = np.array([[0, 0, 0], [0, 0, 0], [1, 0, 0]])
+    with pytest.raises(ValueError, match="equal numbers"):
+        infer_shots_from_positions(xyz)
 
 
 def test_motion_missing_and_nonplanar_rejected():
