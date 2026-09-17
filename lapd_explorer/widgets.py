@@ -264,3 +264,94 @@ class ImportDialog(W.QDialog):
             self.message.setText("The read is still running. Close after it finishes.")
             return
         super().reject()
+
+
+class SmoothingDialog(W.QDialog):
+    """Show only the controls relevant to the selected time filter."""
+    METHODS = {"Moving average": "moving", "Savitzky–Golay": "savgol",
+               "Gaussian": "gaussian", "Butterworth low-pass": "butterworth"}
+
+    def __init__(self, settings, time, parent=None):
+        super().__init__(parent)
+        self.time = time
+        self.setWindowTitle("Time smoothing settings")
+        self.setMinimumWidth(460)
+        layout = W.QVBoxLayout(self)
+        note = W.QLabel("Applied after optional integration, independently to each channel, position, case and shot. Windows and σ are in samples.")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        self.form = W.QFormLayout()
+        layout.addLayout(self.form)
+        self.method = combo(list(self.METHODS))
+        self.method.setCurrentIndex(list(self.METHODS.values()).index(settings["method"]))
+        self.form.addRow("Method", self.method)
+        self.fields = {
+            "window_size": spin(1, 1000000, settings["window_size"]),
+            "polyorder": spin(0, 100, settings["polyorder"]),
+            "sigma": W.QLineEdit(str(settings["sigma"])),
+            "cutoff": W.QLineEdit(str(settings["cutoff"])),
+            "butter_order": spin(1, 20, settings["butter_order"]),
+            "mode": combo(["nearest", "reflect", "mirror", "constant", "wrap"]),
+            "nan_policy": combo(["propagate", "interp"]),
+        }
+        self.fields["mode"].setCurrentText(settings["mode"])
+        self.fields["nan_policy"].setCurrentText(settings["nan_policy"])
+        for key, label in [("window_size", "Window (samples)"), ("polyorder", "Polynomial order"),
+                           ("sigma", "Gaussian σ (samples)"), ("cutoff", "Cutoff (Hz)"),
+                           ("butter_order", "Filter order"), ("mode", "Boundary mode"),
+                           ("nan_policy", "Missing values")]:
+            self.form.addRow(label, self.fields[key])
+        self.fields["nan_policy"].setToolTip("propagate: missing values spread through the filter. interp: interpolate gaps, extend endpoints; entirely missing traces stay NaN.")
+        self.fields["mode"].setToolTip("constant pads with zero; nearest extends endpoints; reflect/mirror reflect edges; wrap assumes periodic data.")
+        self.hint = W.QLabel()
+        self.hint.setWordWrap(True)
+        layout.addWidget(self.hint)
+        self.error_label = W.QLabel()
+        self.error_label.setWordWrap(True)
+        layout.addWidget(self.error_label)
+        buttons = W.QDialogButtonBox(W.QDialogButtonBox.Ok | W.QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.method.currentIndexChanged.connect(self.update_fields)
+        self.update_fields()
+
+    def update_fields(self):
+        import numpy as np
+        method = self.METHODS[self.method.currentText()]
+        active = {"moving": {"window_size", "mode"}, "savgol": {"window_size", "polyorder"},
+                  "gaussian": {"sigma", "mode"}, "butterworth": {"cutoff", "butter_order"}}[method]
+        for key, widget in self.fields.items():
+            self.form.setRowVisible(widget, key in active or key == "nan_policy")
+        if method == "butterworth":
+            intervals = np.diff(self.time)
+            uniform = len(intervals) and np.allclose(intervals, intervals[0], rtol=1e-5, atol=abs(intervals[0])*1e-8)
+            text = (f"Sampling rate comes from the data. Nyquist: {0.5/intervals[0]:g} Hz. Zero-phase filtering uses forward/backward passes."
+                    if uniform else "Butterworth requires at least two uniformly spaced time samples.")
+        elif method == "savgol":
+            text = "Use an odd window no longer than the trace and larger than the polynomial order. Edges use polynomial interpolation."
+        else:
+            text = "Filtering uses sample spacing; on nonuniform time grids the physical smoothing width varies."
+        self.hint.setText(text + " Interpolation here cannot undo missing values already propagated by integration.")
+        self.error_label.clear()
+
+    def settings(self):
+        method = self.METHODS[self.method.currentText()]
+        result = dict(method=method, nan_policy=self.fields["nan_policy"].currentText())
+        active = {"moving": ("window_size", "mode"), "savgol": ("window_size", "polyorder"),
+                  "gaussian": ("sigma", "mode"), "butterworth": ("cutoff", "butter_order")}[method]
+        for key in active:
+            widget = self.fields[key]
+            result[key] = (widget.value() if isinstance(widget, W.QSpinBox) else
+                           widget.currentText() if isinstance(widget, W.QComboBox) else float(widget.text()))
+        return result
+
+    def accept(self):
+        import numpy as np
+        from .smoothing import smooth_time_series
+        try:
+            smooth_time_series(np.zeros(len(self.time)), time=self.time, **self.settings())
+        except (ValueError, TypeError) as exc:
+            self.error_label.setText(str(exc))
+            return
+        super().accept()

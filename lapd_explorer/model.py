@@ -3,6 +3,7 @@ from dataclasses import dataclass, field, replace
 import numpy as np
 from scipy.integrate import cumulative_trapezoid
 from scipy.signal import welch
+from .smoothing import smooth_time_series
 
 
 @dataclass
@@ -58,8 +59,8 @@ class Dataset:
         return self.channels[name][key]
 
 
-def preprocess(data, *, average=False, baseline="None", integrate=False, gain=1.0):
-    """Apply per-trace baseline → integration → gain → repeat averaging.
+def preprocess(data, *, average=False, baseline="None", integrate=False, gain=1.0, smoothing=None):
+    """Apply per-trace baseline → integration → smoothing → gain → repeat averaging.
 
     Averaging never combines case or position axes. No inferred error bars are
     produced when only one stored trace is available.
@@ -85,6 +86,8 @@ def preprocess(data, *, average=False, baseline="None", integrate=False, gain=1.
             raise ValueError("Unknown baseline operation.")
         if integrate:
             a = cumulative_trapezoid(a, t, axis=-1, initial=0)
+        if smoothing is not None:
+            a = smooth_time_series(a, time=t, **smoothing)
         a *= gain
         if average and "shot" in data.dims:
             a = np.mean(a, axis=data.dims.index("shot"))
@@ -93,6 +96,13 @@ def preprocess(data, *, average=False, baseline="None", integrate=False, gain=1.
         steps.append(baseline)
     if integrate:
         steps.append("Cumulative trapezoidal integration; initial value 0")
+    if smoothing is not None:
+        from .smoothing import DEFAULT_SMOOTHING
+        settings = DEFAULT_SMOOTHING | smoothing
+        keys = {"moving": ("window_size", "mode"), "savgol": ("window_size", "polyorder"),
+                "gaussian": ("sigma", "mode"), "butterworth": ("cutoff", "butter_order")}[settings["method"]]
+        details = ", ".join(f"{k}={settings[k]}" for k in (*keys, "nan_policy"))
+        steps.append(f"Time smoothing: {settings['method']} ({details})")
     if gain != 1:
         steps.append(f"Gain × {gain:g}")
     dims = data.dims

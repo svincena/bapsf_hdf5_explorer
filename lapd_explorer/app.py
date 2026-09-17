@@ -10,7 +10,8 @@ from PySide6 import QtCore as C, QtGui as G, QtWidgets as W
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from .model import demo, preprocess, quantity
 from . import io, plotting
-from .widgets import Worker, ImportDialog, combo, spin
+from .widgets import Worker, ImportDialog, SmoothingDialog, combo, spin
+from .smoothing import DEFAULT_SMOOTHING
 
 STYLE = """
 QWidget { background: #0c1422; color: #e7eef8; font-family: 'Helvetica Neue', 'Segoe UI'; font-size: 12px; }
@@ -125,6 +126,17 @@ class MainWindow(W.QMainWindow):
         pf.addRow(self.average)
         pf.addRow("Baseline", self.baseline)
         pf.addRow(self.integrate)
+        self.smoothing_settings = dict(DEFAULT_SMOOTHING)
+        self.smooth = W.QCheckBox("Smooth in time")
+        self.smooth.setToolTip("Filter each trace after optional integration and before gain/shot averaging.")
+        self.smooth_button = W.QPushButton("Settings…")
+        self.smooth_button.setEnabled(False)
+        self.smooth.toggled.connect(self.smooth_button.setEnabled)
+        self.smooth_button.clicked.connect(self.configure_smoothing)
+        smooth_row = W.QHBoxLayout()
+        smooth_row.addWidget(self.smooth)
+        smooth_row.addWidget(self.smooth_button)
+        pf.addRow(smooth_row)
         pf.addRow("Gain", self.gain)
         apply = W.QPushButton("Apply to original data")
         apply.setObjectName("primary")
@@ -271,6 +283,9 @@ class MainWindow(W.QMainWindow):
         self.average.setChecked(False)
         self.baseline.setCurrentIndex(0)
         self.integrate.setChecked(False)
+        self.smooth.setChecked(False)
+        self.smoothing_settings = dict(DEFAULT_SMOOTHING)
+        self.smooth_button.setToolTip("")
         self.gain.setText("1")
         self.mode.blockSignals(True)
         self.mode.setCurrentIndex(0)
@@ -312,10 +327,17 @@ class MainWindow(W.QMainWindow):
         self.source.setText(f"{data.source}   |   " + " × ".join(f"{d}: {n}" for d, n in zip(data.dims, data.shape)))
         self.history.setText(" → ".join(data.history) or "Original data")
 
+    def configure_smoothing(self):
+        dialog = SmoothingDialog(self.smoothing_settings, self.raw.coords["time"], self)
+        if dialog.exec() == W.QDialog.Accepted:
+            self.smoothing_settings.update(dialog.settings())
+            self.smooth_button.setToolTip(str(dialog.settings()))
+
     def apply_processing(self):
         try:
             settings = dict(average=self.average.isChecked(), baseline=self.baseline.currentText(),
-                            integrate=self.integrate.isChecked(), gain=float(self.gain.text()))
+                            integrate=self.integrate.isChecked(), gain=float(self.gain.text()),
+                            smoothing=dict(self.smoothing_settings) if self.smooth.isChecked() else None)
             self.launch(lambda: preprocess(self.raw, **settings), self.processed, "Processing traces…")
         except ValueError as exc:
             self.error(str(exc))
@@ -329,6 +351,9 @@ class MainWindow(W.QMainWindow):
         self.average.setChecked(False)
         self.baseline.setCurrentIndex(0)
         self.integrate.setChecked(False)
+        self.smooth.setChecked(False)
+        self.smoothing_settings = dict(DEFAULT_SMOOTHING)
+        self.smooth_button.setToolTip("")
         self.gain.setText("1")
         self.processed(self.raw)
 

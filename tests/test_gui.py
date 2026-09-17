@@ -97,3 +97,51 @@ def test_import_dialog_applies_shot_guess_and_keeps_fields_editable(app, monkeyp
     assert (dialog.cases.value(), dialog.repeats.value()) == (3, 4)
     dialog.guess_timer.stop()
     dialog.reject()
+
+
+def test_smoothing_dialog_and_processing(app, monkeypatch, tmp_path):
+    from lapd_explorer.widgets import SmoothingDialog
+    from lapd_explorer.smoothing import DEFAULT_SMOOTHING, smooth_time_series
+    dialog = SmoothingDialog(dict(DEFAULT_SMOOTHING), np.arange(40.)/10000)
+    dialog.show()
+    app.processEvents()
+    assert dialog.fields["window_size"].isVisible()
+    assert not dialog.fields["cutoff"].isVisible()
+    dialog.method.setCurrentText("Butterworth low-pass")
+    assert dialog.fields["cutoff"].isVisible()
+    assert not dialog.fields["window_size"].isVisible()
+    dialog.fields["cutoff"].setText("5000")
+    dialog.accept()
+    assert "Nyquist" in dialog.error_label.text()
+    assert dialog.result() != W.QDialog.Accepted
+    dialog.method.setCurrentText("Savitzky–Golay")
+    dialog.fields["window_size"].setValue(4)
+    dialog.accept()
+    assert "odd" in dialog.error_label.text()
+    dialog.fields["window_size"].setValue(7)
+    dialog.accept()
+    assert dialog.result() == W.QDialog.Accepted
+    w = MainWindow()
+    a = np.arange(40.)**2
+    data = Dataset({"A": a}, ("time",), {"time": np.arange(40.)})
+    w.set_data(data)
+    assert not w.smooth.isChecked() and not w.smooth_button.isEnabled()
+    w.smooth.setChecked(True)
+    assert w.smooth_button.isEnabled()
+    w.smoothing_settings.update(method="moving", window_size=3)
+    monkeypatch.setattr(w, "launch", lambda fn, done, message: done(fn()))
+    w.apply_processing()
+    expected = smooth_time_series(a, window_size=3)
+    np.testing.assert_allclose(w.data.channels["A"], expected)
+    w.apply_processing()
+    np.testing.assert_allclose(w.data.channels["A"], expected)
+    w.show()
+    app.processEvents()
+    w.grab().save(str(tmp_path / "smoothing-window.png"))
+    w.reset_processing()
+    assert not w.smooth.isChecked() and w.data is w.raw
+    assert w.smoothing_settings == DEFAULT_SMOOTHING
+    w.smooth.setChecked(True)
+    w.set_data(data)
+    assert not w.smooth.isChecked()
+    w.close()
