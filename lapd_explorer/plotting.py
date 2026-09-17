@@ -25,9 +25,44 @@ def style(ax):
     ax.grid(alpha=.12, color=MUTED)
 
 
+def finite_limits(values):
+    """Full-data bounds, with a usable range for constant or missing slices."""
+    finite = values[np.isfinite(values)]
+    if not finite.size:
+        return (0., 1.)
+    lo, hi = float(finite.min()), float(finite.max())
+    if lo == hi:
+        pad = max(abs(lo)*.05, .5)
+        return (lo-pad, hi+pad)
+    return (lo, hi)
+
+
+def configure_slice_axis(ax, values, settings):
+    limits = finite_limits(values)
+    mode = settings.get("mode", "auto")
+    if mode == "manual":
+        limits = tuple(settings["limits"])
+        if len(limits) != 2 or not np.all(np.isfinite(limits)) or limits[0] >= limits[1]:
+            raise ValueError("Slice axis limits must be finite, with minimum < maximum.")
+    elif mode not in {"auto", "interactive"}:
+        raise ValueError("Unknown slice axis scaling mode.")
+    ax.set_ylim(*limits)
+    ax.set_navigate(mode == "interactive")
+    if mode == "interactive":
+        view = settings.get("view")
+        if view:
+            ax.set_xlim(*view["xlim"])
+            ax.set_ylim(*view["ylim"])
+    else:
+        # Home/back can restore saved axes even when navigation is disabled.
+        # Keep manual and full-time limits fixed during all toolbar actions.
+        ax.callbacks.connect("ylim_changed", lambda changed: changed.set_ylim(*limits, emit=False))
+
+
 def render(fig, data, opts, values=None):
     """Render selected state; return main axes for click-to-slice interaction."""
     fig.clear()
+    fig._lapd_slice_axes = ()
     names, mode = opts["names"], opts["mode"]
     values = quantity(data, names, mode, opts["case"], opts["shot"]) if values is None else values
     spatial = data.spatial_dims
@@ -93,6 +128,10 @@ def render(fig, data, opts, values=None):
         v_slice, = side2.plot(vertical, frame[:, index[1]], color="#91aaff")
         side2.set(title=f"{spatial[0]} slice · {spatial[1]}={horizontal[index[1]]:g}",
                   xlabel=f"{spatial[0]} ({data.spatial_units})", ylabel=data.units)
+        slice_settings = opts.get("slice_axes", [{"mode": "auto"}, {"mode": "auto"}])
+        configure_slice_axis(side1, values[index[0], :, :], slice_settings[0])
+        configure_slice_axis(side2, values[:, index[1], :], slice_settings[1])
+        fig._lapd_slice_axes = (side1, side2)
     elif len(spatial) == 1:
         spatial_line, = ax.plot(coords[0], values[:, ti], color=ACCENT, lw=2)
         ax.axvline(coords[0][index[0]], color=FG, lw=.8, ls="--")
@@ -145,9 +184,7 @@ def render(fig, data, opts, values=None):
                     mesh.set_clim(lo if lo != hi else lo-.5, hi if lo != hi else hi+.5)
             h_slice.set_ydata(frame[index[0], :])
             v_slice.set_ydata(frame[:, index[1]])
-            for side in (side1, side2):
-                side.relim()
-                side.autoscale_view()
+            # Limits are fixed over time, or owned by interactive navigation.
             if mode == "Vector":
                 u = data.selected(names[0], opts["case"], opts["shot"])[..., frame_index]
                 v = data.selected(names[1], opts["case"], opts["shot"])[..., frame_index]

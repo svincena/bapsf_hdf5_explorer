@@ -187,3 +187,103 @@ def test_butterworth_type_controls_and_settings(app, monkeypatch):
     w.reset_processing()
     assert w.smoothing_settings["butter_type"] == "lowpass"
     w.close()
+
+
+def test_plane_slice_axis_modes_and_navigation(app, tmp_path):
+    from lapd_explorer import plotting
+    w = MainWindow()
+    values = np.arange(24.).reshape(2, 3, 4)
+    values[1, 2, 3] = 1000  # Outside both initially selected slices.
+    data = Dataset({"A": values}, ("y", "x", "time"),
+                   {"y": np.arange(2), "x": np.arange(3), "time": np.arange(4)})
+    w.set_data(data)
+    for box in w.slice_boxes:
+        box.setValue(0)
+    w.show()
+    w.draw()
+    app.processEvents()
+    horizontal, vertical = w.fig._lapd_slice_axes
+    np.testing.assert_allclose(horizontal.get_ylim(), (0, 11))
+    np.testing.assert_allclose(vertical.get_ylim(), (0, 15))
+    assert "x slice" in w.slice_axis_controls[0].title()
+    assert "y slice" in w.slice_axis_controls[1].title()
+    w.frame.setValue(3)
+    w.draw()
+    assert w.fig._lapd_slice_axes[0] is horizontal
+    np.testing.assert_allclose(horizontal.get_ylim(), (0, 11))
+    np.testing.assert_allclose(vertical.get_ylim(), (0, 15))
+    w.slice_boxes[0].setValue(1)
+    w.draw()
+    np.testing.assert_allclose(w.fig._lapd_slice_axes[0].get_ylim(), (12, 1000))
+
+    control = w.slice_axis_controls[0]
+    control.mode.setCurrentText("Manual")
+    control.minimum.setText("-2e1")
+    control.maximum.setText("30")
+    control.accept_limits()
+    w.draw()
+    np.testing.assert_allclose(w.fig._lapd_slice_axes[0].get_ylim(), (-20, 30))
+    np.testing.assert_allclose(w.fig._lapd_slice_axes[1].get_ylim(), (0, 15))
+    control.minimum.setText("nan")
+    control.accept_limits()
+    w.frame.setValue(0)
+    w.draw()
+    assert "Previous limits remain active" in control.message.text()
+    np.testing.assert_allclose(w.fig._lapd_slice_axes[0].get_ylim(), (-20, 30))
+    control.minimum.setText("40")
+    control.accept_limits()
+    assert control.settings()["limits"] == (-20, 30)
+
+    control.mode.setCurrentText("Interactive")
+    w.draw()
+    horizontal, vertical = w.fig._lapd_slice_axes
+    assert horizontal.get_navigate() and not vertical.get_navigate()
+    horizontal.set_ylim(-5, 5)
+    horizontal.set_xlim(.25, 1.75)
+    w.toolbar.push_current()
+    w.toolbar.back()
+    np.testing.assert_allclose(horizontal.get_ylim(), (-20, 30))
+    w.toolbar.forward()
+    np.testing.assert_allclose(horizontal.get_ylim(), (-5, 5))
+    w.frame.setValue(2)
+    w.draw()
+    assert w.fig._lapd_slice_axes[0] is horizontal
+    np.testing.assert_allclose(horizontal.get_ylim(), (-5, 5))
+    w.cmap.setCurrentText("plasma")
+    w.draw()
+    horizontal, vertical = w.fig._lapd_slice_axes
+    np.testing.assert_allclose(horizontal.get_ylim(), (-5, 5))
+    np.testing.assert_allclose(horizontal.get_xlim(), (.25, 1.75))
+
+    # The standalone movie renderer gets the same interactive/manual bounds.
+    other = w.slice_axis_controls[1]
+    other.mode.setCurrentText("Manual")
+    other.minimum.setText("-10")
+    other.maximum.setText("20")
+    other.accept_limits()
+    w.draw()
+    horizontal, vertical = w.fig._lapd_slice_axes
+    exported = plotting.figure()
+    plotting.render(exported, data, w.options())
+    exported._lapd_update_frame(3)
+    np.testing.assert_allclose(exported._lapd_slice_axes[0].get_ylim(), (-5, 5))
+    np.testing.assert_allclose(exported._lapd_slice_axes[1].get_ylim(), (-10, 20))
+    exported.clear()
+    w.toolbar.home()
+    np.testing.assert_allclose(horizontal.get_ylim(), (12, 1000))
+    np.testing.assert_allclose(vertical.get_ylim(), (-10, 20))
+    w.canvas.draw()
+    w.grab().save(str(tmp_path / "slice-axis-controls.png"))
+    w.set_data(Dataset({"A": np.ones(4)}, ("time",), {"time": np.arange(4)}))
+    w.draw()
+    assert w.slice_axis_panel.isHidden()
+    assert not w.fig._lapd_slice_axes
+    w.close()
+
+
+def test_slice_limits_constant_and_missing():
+    from lapd_explorer.plotting import finite_limits
+    assert finite_limits(np.array([np.nan, np.inf])) == (0, 1)
+    low, high = finite_limits(np.full((3, 4), 2.))
+    assert low < 2 < high
+    assert finite_limits(np.array([np.nan, -7, 4, np.inf])) == (-7, 4)

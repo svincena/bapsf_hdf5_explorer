@@ -107,6 +107,8 @@ Magnitude is computed **after** preprocessing each component. Averaging componen
 
 Frame stride changes playback/export sampling, not the scientific arrays. All processing, cursor traces and PSD use full time resolution. The line position–time preview subsamples time to approximately 1,000 columns to keep interaction responsive. Playback FPS is a target; achievable rate depends on plot size and hardware.
 
+For planes, each spatial slice plot has independent vertical-axis controls beside it. **Auto — all times** (the default) uses the finite minimum and maximum across every position and time sample in that slice, for the selected quantity, case and shot. Bounds update when the selected slice or processed data changes and stay fixed during playback. Constant slices receive a small range around their value; entirely missing slices use 0–1. **Manual** accepts Min/Max in the displayed signal units, including scientific notation; press Enter or leave the field to apply. Invalid entries keep the previous valid limits. **Interactive** enables the plot toolbar's zoom, pan, Home, back and forward controls; the view persists as time advances and plots redraw. Home restores the full-time slice range. Auto/manual modes keep their vertical limits during toolbar navigation. Stills and movies preserve the selected slice limits. Loading another dataset resets both controls to Auto; these controls appear only for planes and use the actual spatial axis names (including xz/yz planes).
+
 ## Export
 
 - **Save image…** captures the full current visualization, including slices/time trace.

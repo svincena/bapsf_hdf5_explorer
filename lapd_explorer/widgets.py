@@ -266,6 +266,73 @@ class ImportDialog(W.QDialog):
         super().reject()
 
 
+class SliceAxisControls(W.QGroupBox):
+    """Independent vertical limits; invalid edits retain the last valid bounds."""
+    changed = C.Signal()
+    MODES = {"Auto — all times": "auto", "Manual": "manual", "Interactive": "interactive"}
+
+    def __init__(self, parent=None):
+        super().__init__("Slice vertical axis", parent)
+        self._limits = (-1., 1.)
+        layout = W.QVBoxLayout(self)
+        self.mode = combo(list(self.MODES))
+        layout.addWidget(self.mode)
+        form = W.QFormLayout()
+        self.minimum, self.maximum = W.QLineEdit("-1"), W.QLineEdit("1")
+        form.addRow("Min", self.minimum)
+        form.addRow("Max", self.maximum)
+        layout.addLayout(form)
+        self.message = W.QLabel()
+        self.message.setWordWrap(True)
+        layout.addWidget(self.message)
+        layout.addStretch()
+        self.mode.currentIndexChanged.connect(self.mode_changed)
+        self.minimum.editingFinished.connect(self.accept_limits)
+        self.maximum.editingFinished.connect(self.accept_limits)
+        self.mode_changed()
+
+    def mode_changed(self):
+        manual = self.mode.currentText() == "Manual"
+        self.minimum.setEnabled(manual)
+        self.maximum.setEnabled(manual)
+        self.message.setText({"Manual": "Enter min/max, then press Enter or leave the field.",
+                              "Interactive": "Use the plot toolbar to zoom, pan, or return Home.",
+                              "Auto — all times": "Min/max over all positions and times in this slice."}[self.mode.currentText()])
+        if manual:
+            self.accept_limits()
+        else:
+            self.changed.emit()
+
+    def accept_limits(self):
+        if self.mode.currentText() != "Manual":
+            return
+        import numpy as np
+        try:
+            limits = (float(self.minimum.text()), float(self.maximum.text()))
+            if not np.all(np.isfinite(limits)) or limits[0] >= limits[1]:
+                raise ValueError
+        except ValueError:
+            self.message.setText("Enter finite values with Min < Max. Previous limits remain active.")
+            return
+        self._limits = limits
+        self.message.setText("Manual limits apply to every frame.")
+        self.changed.emit()
+
+    def show_limits(self, limits):
+        if self.mode.currentText() != "Manual":
+            self._limits = tuple(limits)
+            self.minimum.setText(f"{limits[0]:.12g}")
+            self.maximum.setText(f"{limits[1]:.12g}")
+
+    def settings(self):
+        mode = self.MODES[self.mode.currentText()]
+        return dict(mode=mode, limits=self._limits) if mode == "manual" else dict(mode=mode)
+
+    def reset(self):
+        self.mode.setCurrentIndex(0)
+        self.show_limits((-1., 1.))
+
+
 class SmoothingDialog(W.QDialog):
     """Show only the controls relevant to the selected time filter."""
     METHODS = {"Moving average": "moving", "Savitzky–Golay": "savgol",

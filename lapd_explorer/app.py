@@ -10,7 +10,7 @@ from PySide6 import QtCore as C, QtGui as G, QtWidgets as W
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from .model import demo, preprocess, quantity
 from . import io, plotting
-from .widgets import Worker, ImportDialog, SmoothingDialog, combo, spin
+from .widgets import Worker, ImportDialog, SmoothingDialog, SliceAxisControls, combo, spin
 from .smoothing import DEFAULT_SMOOTHING
 
 STYLE = """
@@ -53,6 +53,7 @@ class MainWindow(W.QMainWindow):
         self.raw = self.data = None
         self.jobs = []
         self._values = None
+        self._slice_views = [None, None]
         self._busy = False
         self.timer = C.QTimer(self)
         self.timer.timeout.connect(self.advance)
@@ -187,7 +188,18 @@ class MainWindow(W.QMainWindow):
         self.canvas = FigureCanvasQTAgg(self.fig)
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
         wl.addWidget(self.toolbar)
-        wl.addWidget(self.canvas, 1)
+        plot_row = W.QHBoxLayout()
+        plot_row.addWidget(self.canvas, 1)
+        self.slice_axis_panel = W.QWidget()
+        self.slice_axis_panel.setFixedWidth(210)
+        limits_layout = W.QVBoxLayout(self.slice_axis_panel)
+        limits_layout.setContentsMargins(0, 0, 0, 0)
+        self.slice_axis_controls = [SliceAxisControls(), SliceAxisControls()]
+        for control, stretch in zip(self.slice_axis_controls, (145, 100)):
+            limits_layout.addWidget(control, stretch)
+            control.changed.connect(self.schedule_draw)
+        plot_row.addWidget(self.slice_axis_panel)
+        wl.addLayout(plot_row, 1)
         timeline = W.QHBoxLayout()
         self.play = W.QPushButton("▶ Play")
         self.play.clicked.connect(self.toggle_play)
@@ -280,6 +292,9 @@ class MainWindow(W.QMainWindow):
     def set_data(self, data):
         self.stop_play()
         self.raw = self.data = data
+        self._slice_views = [None, None]
+        for control in self.slice_axis_controls:
+            control.reset()
         self.average.setChecked(False)
         self.baseline.setCurrentIndex(0)
         self.integrate.setChecked(False)
@@ -309,6 +324,11 @@ class MainWindow(W.QMainWindow):
 
     def refresh_dimensions(self):
         data = self.data
+        plane = len(data.spatial_dims) == 2
+        self.slice_axis_panel.setVisible(plane)
+        if plane:
+            for control, dim in zip(self.slice_axis_controls, reversed(data.spatial_dims)):
+                control.setTitle(f"{dim} slice · vertical axis ({data.units})")
         self.average.setEnabled("shot" in self.raw.dims and len(self.raw.coords["shot"]) > 1)
         for dim, widget in [("case", self.case), ("shot", self.shot)]:
             widget.setRange(0, len(data.coords.get(dim, [0]))-1)
@@ -371,7 +391,9 @@ class MainWindow(W.QMainWindow):
         return dict(names=names, mode=mode, case=self.case.value(), shot=self.shot.value(),
                     slices=[w.value() for w in self.slice_boxes], time=self.slider.value(),
                     time_unit=self.time_unit.currentText(), sigfigs=self.sigfigs.value(),
-                    lock=self.lock.isChecked(), cmap=self.cmap.currentText(), arrow_cmap=self.arrow_cmap.currentText())
+                    lock=self.lock.isChecked(), cmap=self.cmap.currentText(), arrow_cmap=self.arrow_cmap.currentText(),
+                    slice_axes=[dict(control.settings(), view=view)
+                                for control, view in zip(self.slice_axis_controls, self._slice_views)])
 
     def invalidate(self, *args):
         self.arrow_cmap.setEnabled(self.mode.currentText() == "Vector")
@@ -390,11 +412,32 @@ class MainWindow(W.QMainWindow):
             opts = self.options()
             if self._values is None:
                 self._values = quantity(self.data, opts["names"], opts["mode"], opts["case"], opts["shot"])
-            render_key = (id(self._values), repr({k: v for k, v in opts.items() if k != "time"}))
+            # Navigation changes the view without changing the plotted data.
+            key_options = {k: v for k, v in opts.items() if k not in {"time", "slice_axes"}}
+            key_options["slice_axes"] = [control.settings() for control in self.slice_axis_controls]
+            render_key = (id(self._values), repr(key_options))
             if getattr(self, "_render_key", None) == render_key:
                 self.fig._lapd_update_frame(opts["time"])
             else:
-                self.main_ax = plotting.render(self.fig, self.data, opts, self._values)
+                # Seed Home with the full-time slice bounds before restoring
+                # interactive views onto axes rebuilt for a new slice/quantity.
+                initial = dict(opts, slice_axes=[{k: v for k, v in setting.items() if k != "view"}
+                                                for setting in opts["slice_axes"]])
+                self.main_ax = plotting.render(self.fig, self.data, initial, self._values)
+                self.toolbar.update()
+                self.toolbar.push_current()
+                for i, axis in enumerate(self.fig._lapd_slice_axes):
+                    setting = opts["slice_axes"][i]
+                    if setting["mode"] == "interactive" and setting["view"]:
+                        axis.set_xlim(*setting["view"]["xlim"])
+                        axis.set_ylim(*setting["view"]["ylim"])
+                    def remember(changed, index=i):
+                        self._slice_views[index] = dict(xlim=changed.get_xlim(), ylim=changed.get_ylim())
+                        self.slice_axis_controls[index].show_limits(changed.get_ylim())
+                    axis.callbacks.connect("ylim_changed", remember)
+                    axis.callbacks.connect("xlim_changed", remember)
+                    remember(axis)
+                self.toolbar.push_current()
                 self._render_key = render_key
             self.canvas.draw_idle()
             t = self.data.coords["time"][opts["time"]] * plotting.TIME_UNITS[opts["time_unit"]]
