@@ -107,7 +107,7 @@ def test_smoothing_dialog_and_processing(app, monkeypatch, tmp_path):
     app.processEvents()
     assert dialog.fields["window_size"].isVisible()
     assert not dialog.fields["cutoff"].isVisible()
-    dialog.method.setCurrentText("Butterworth low-pass")
+    dialog.method.setCurrentText("Butterworth")
     assert dialog.fields["cutoff"].isVisible()
     assert not dialog.fields["window_size"].isVisible()
     dialog.fields["cutoff"].setText("5000")
@@ -144,4 +144,46 @@ def test_smoothing_dialog_and_processing(app, monkeypatch, tmp_path):
     w.smooth.setChecked(True)
     w.set_data(data)
     assert not w.smooth.isChecked()
+    w.close()
+
+
+def test_butterworth_type_controls_and_settings(app, monkeypatch):
+    from lapd_explorer.widgets import SmoothingDialog
+    from lapd_explorer.smoothing import DEFAULT_SMOOTHING
+    t = np.arange(100.)/10000
+    settings = dict(DEFAULT_SMOOTHING, method="butterworth")
+    dialog = SmoothingDialog(settings, t)
+    dialog.show()
+    app.processEvents()
+    assert dialog.fields["butter_type"].isVisible()
+    assert not dialog.fields["cutoff_upper"].isVisible()
+    dialog.fields["butter_type"].setCurrentText("High-pass")
+    assert dialog.settings()["butter_type"] == "highpass"
+    assert "cutoff_upper" not in dialog.settings()
+    dialog.fields["butter_type"].setCurrentText("Band-pass")
+    assert dialog.fields["cutoff_upper"].isVisible()
+    assert dialog.form.labelForField(dialog.fields["cutoff"]).text() == "Lower cutoff (Hz)"
+    dialog.fields["cutoff_upper"].setText("500")
+    dialog.accept()
+    assert "lower < upper" in dialog.error_label.text()
+    dialog.fields["cutoff_upper"].setText("2e3")
+    dialog.accept()
+    assert dialog.result() == W.QDialog.Accepted
+    settings.update(dialog.settings())
+    restored = SmoothingDialog(settings, t)
+    assert restored.settings() == dialog.settings()
+    restored.method.setCurrentText("Gaussian")
+    assert restored.fields["butter_type"].isHidden()
+    assert restored.fields["cutoff_upper"].isHidden()
+    restored.reject()
+    w = MainWindow()
+    w.set_data(Dataset({"A": np.ones(100)}, ("time",), {"time": t}))
+    w.smooth.setChecked(True)
+    w.smoothing_settings = settings
+    monkeypatch.setattr(w, "launch", lambda fn, done, message: done(fn()))
+    w.apply_processing()
+    np.testing.assert_allclose(w.data.channels["A"], 0, atol=1e-12)
+    assert "butter_type=bandpass" in w.data.history[-1]
+    w.reset_processing()
+    assert w.smoothing_settings["butter_type"] == "lowpass"
     w.close()

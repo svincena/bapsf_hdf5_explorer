@@ -6,7 +6,8 @@ from scipy.signal import savgol_filter, butter, sosfiltfilt
 
 
 DEFAULT_SMOOTHING = dict(method="moving", window_size=11, polyorder=3,
-                         sigma=2.0, cutoff=1000.0, butter_order=4,
+                         sigma=2.0, cutoff=1000.0, cutoff_upper=10000.0,
+                         butter_type="lowpass", butter_order=4,
                          mode="nearest", nan_policy="propagate")
 
 
@@ -23,12 +24,14 @@ def _integer(value, name, minimum):
 def smooth_time_series(A, method="moving", *, time_axis=-1, window_size=11,
                        polyorder=3, sigma=2.0, cutoff=None, fs=None, dt=None,
                        butter_order=4, mode="nearest", nan_policy="propagate",
-                       time=None):
+                       time=None, butter_type="lowpass", cutoff_upper=None):
     """Filter each trace without mixing any other axes or modifying the input.
 
     Moving/Savitzky–Golay windows and Gaussian sigma are in samples. These
     filters work in sample-index space even on nonuniform time grids.
     Butterworth requires uniform time (seconds), or exactly one of fs/dt.
+    butter_type selects lowpass (default), highpass, or bandpass. cutoff is
+    in Hz; bandpass also requires cutoff_upper in Hz, above cutoff.
     Short Butterworth traces are rejected rather than silently reducing padding.
     Nonfinite samples are treated as missing: propagate spreads them over the
     filter support (the whole trace for Butterworth); interp fills gaps using
@@ -98,6 +101,8 @@ def smooth_time_series(A, method="moving", *, time_axis=-1, window_size=11,
         return gaussian_filter1d(b, sigma, axis=axis, mode=mode)
     if method == "butterworth":
         butter_order = _integer(butter_order, "Butterworth order", 1)
+        if butter_type not in {"lowpass", "highpass", "bandpass"}:
+            raise ValueError("Butterworth type must be lowpass, highpass, or bandpass.")
         if time is not None:
             if fs is not None or dt is not None:
                 raise ValueError("Supply time coordinates or fs/dt, not both.")
@@ -113,7 +118,15 @@ def smooth_time_series(A, method="moving", *, time_axis=-1, window_size=11,
         fs = float(fs) if fs is not None else 1.0 / dt
         if cutoff is None or not np.isfinite(cutoff) or not 0 < cutoff < fs/2:
             raise ValueError(f"Cutoff must satisfy 0 < cutoff < Nyquist ({fs/2:g} Hz).")
-        sos = butter(butter_order, cutoff, fs=fs, output="sos")
+        frequencies = cutoff
+        if butter_type == "bandpass":
+            if (cutoff_upper is None or not np.isfinite(cutoff_upper)
+                    or not cutoff < cutoff_upper < fs/2):
+                raise ValueError(f"Band-pass cutoffs must satisfy 0 < lower < upper < Nyquist ({fs/2:g} Hz).")
+            frequencies = (cutoff, cutoff_upper)
+        # Band-pass designs have twice the order and SOS count of low/high-pass
+        # designs, so derive the required padding from the actual sections.
+        sos = butter(butter_order, frequencies, btype=butter_type, fs=fs, output="sos")
         padlen = 3 * (2*len(sos) + 1 - min((sos[:, 2] == 0).sum(), (sos[:, 5] == 0).sum()))
         if nt <= padlen:
             raise ValueError(f"Butterworth order {butter_order} needs at least {padlen+1} time samples.")

@@ -100,8 +100,12 @@ def preprocess(data, *, average=False, baseline="None", integrate=False, gain=1.
         from .smoothing import DEFAULT_SMOOTHING
         settings = DEFAULT_SMOOTHING | smoothing
         keys = {"moving": ("window_size", "mode"), "savgol": ("window_size", "polyorder"),
-                "gaussian": ("sigma", "mode"), "butterworth": ("cutoff", "butter_order")}[settings["method"]]
-        details = ", ".join(f"{k}={settings[k]}" for k in (*keys, "nan_policy"))
+                "gaussian": ("sigma", "mode"),
+                "butterworth": ("butter_type", "cutoff", "butter_order")}[settings["method"]]
+        if settings["method"] == "butterworth" and settings["butter_type"] == "bandpass":
+            keys = ("butter_type", "cutoff", "cutoff_upper", "butter_order")
+        details = ", ".join(f"{k}={settings[k]}" + (" Hz" if k in {"cutoff", "cutoff_upper"} else "")
+                            for k in (*keys, "nan_policy"))
         steps.append(f"Time smoothing: {settings['method']} ({details})")
     if gain != 1:
         steps.append(f"Gain × {gain:g}")

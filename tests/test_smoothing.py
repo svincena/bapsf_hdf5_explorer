@@ -6,7 +6,9 @@ from lapd_explorer.model import Dataset, preprocess
 
 @pytest.mark.parametrize("method,settings", [("moving", {"window_size": 5}),
     ("savgol", {"window_size": 5, "polyorder": 2}), ("gaussian", {"sigma": 1}),
-    ("butterworth", {"fs": 100, "cutoff": 10})])
+    ("butterworth", {"fs": 100, "cutoff": 10}),
+    ("butterworth", {"fs": 100, "cutoff": 10, "butter_type": "highpass"}),
+    ("butterworth", {"fs": 100, "cutoff": 10, "cutoff_upper": 30, "butter_type": "bandpass"})])
 @pytest.mark.parametrize("shape,axis", [((80,), 0), ((3, 80), -1),
     ((2, 80, 3), 1), ((2, 3, 2, 4, 80), -1)])
 def test_arbitrary_axes_match_independent_traces(method, settings, shape, axis):
@@ -51,6 +53,57 @@ def test_butterworth_suppresses_high_frequency_without_phase_shift():
     a = low + np.sin(2*np.pi*200*t)
     out = smooth_time_series(a, "butterworth", time=t, cutoff=40)
     np.testing.assert_allclose(out[200:-200], low[200:-200], atol=3e-5)
+
+
+@pytest.mark.parametrize("kind,cutoff,upper,expected", [
+    ("lowpass", 20, None, [1, 0, 0]),
+    ("highpass", 100, None, [0, 0, 1]),
+    ("bandpass", 20, 100, [0, 1, 0]),
+])
+def test_butterworth_passbands(kind, cutoff, upper, expected):
+    t = np.arange(8000)/1000
+    waves = np.sin(2*np.pi*np.array([5, 50, 250])[:, None]*t)
+    out = smooth_time_series(waves.sum(axis=0), "butterworth", time=t,
+                             butter_type=kind, cutoff=cutoff, cutoff_upper=upper)
+    # Project away from edge transients to check gain and phase in each band.
+    amplitudes = 2*np.mean(waves[:, 1000:-1000]*out[1000:-1000], axis=1)
+    quadrature = 2*np.mean(np.cos(2*np.pi*np.array([5, 50, 250])[:, None]*t[1000:-1000])
+                           * out[1000:-1000], axis=1)
+    # Fourth-order roll-off leaves a small finite stop-band response.
+    np.testing.assert_allclose(amplitudes, expected, atol=.005)
+    np.testing.assert_allclose(quadrature, 0, atol=1e-6)
+
+
+@pytest.mark.parametrize("kind,lower,upper,match", [
+    ("unknown", 10, 20, "type"),
+    ("bandpass", 10, None, "lower < upper"),
+    ("bandpass", 10, 10, "lower < upper"),
+    ("bandpass", 20, 10, "lower < upper"),
+    ("bandpass", 10, np.nan, "lower < upper"),
+    ("bandpass", 10, np.inf, "lower < upper"),
+    ("bandpass", 10, 50, "Nyquist"),
+    ("highpass", 50, None, "Nyquist"),
+    ("bandpass", 0, 20, "Cutoff"),
+])
+def test_butterworth_invalid_bands(kind, lower, upper, match):
+    with pytest.raises(ValueError, match=match):
+        smooth_time_series(np.ones(100), "butterworth", fs=100,
+                           butter_type=kind, cutoff=lower, cutoff_upper=upper)
+
+
+def test_bandpass_padding_and_history(tmp_path):
+    from lapd_explorer.io import save_dataset, load_dataset
+    settings = dict(method="butterworth", butter_type="bandpass", cutoff=10, cutoff_upper=30)
+    with pytest.raises(ValueError, match="at least 28"):
+        smooth_time_series(np.ones(20), fs=100, **settings)
+    data = Dataset({"A": np.ones(100)}, ("time",), {"time": np.arange(100)/100})
+    result = preprocess(data, smoothing=settings)
+    assert "butter_type=bandpass" in result.history[-1]
+    assert "cutoff=10 Hz" in result.history[-1]
+    assert "cutoff_upper=30 Hz" in result.history[-1]
+    path = tmp_path / "bandpass.h5"
+    save_dataset(path, result)
+    assert load_dataset(path).history == result.history
 
 
 @pytest.mark.parametrize("a,kwargs,match", [
