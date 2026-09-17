@@ -18,5 +18,8 @@ lapd-explorer = "lapd_explorer.app:main"
 [tool.setuptools.packages.find]
 include = ["lapd_explorer*"]
 
+[tool.setuptools.package-data]
+lapd_explorer = ["assets/*.svg"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

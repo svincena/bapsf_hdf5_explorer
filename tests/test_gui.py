@@ -287,3 +287,99 @@ def test_slice_limits_constant_and_missing():
     low, high = finite_limits(np.full((3, 4), 2.))
     assert low < 2 < high
     assert finite_limits(np.array([np.nan, -7, 4, np.inf])) == (-7, 4)
+
+
+def test_appearance_switch_preserves_data_and_slice_limits(app, tmp_path):
+    from matplotlib.colors import to_rgba
+    from PySide6 import QtGui as G
+    from lapd_explorer.appearance import colors
+    from lapd_explorer.widgets import SmoothingDialog
+    w = MainWindow()
+    assert w.appearance.currentText() == "Light"
+    w.show()
+    w.mode.setCurrentText("Vector")
+    w.draw()
+    data = w.data
+    control = w.slice_axis_controls[0]
+    control.mode.setCurrentText("Manual")
+    control.minimum.setText("-2")
+    control.maximum.setText("2")
+    control.accept_limits()
+    for appearance in ("Dark", "Light"):
+        w.appearance.setCurrentText(appearance)
+        w.draw()
+        app.processEvents()
+        w.canvas.draw()
+        theme = colors(appearance)
+        assert w.data is data
+        np.testing.assert_allclose(w.fig.get_facecolor(), to_rgba(theme["bg"]))
+        np.testing.assert_allclose(w.main_ax.get_facecolor(), to_rgba(theme["panel"]))
+        assert w.toolbar.palette().color(G.QPalette.Window).name() == theme["bg"]
+        assert w.main_ax.xaxis.label.get_color() == theme["muted"]
+        assert w.main_ax.yaxis.get_offset_text().get_color() == theme["muted"]
+        np.testing.assert_allclose(w.fig._lapd_slice_axes[0].get_ylim(), (-2, 2))
+        assert w.options()["appearance"] == appearance
+        w.grab().save(str(tmp_path / f"plane-{appearance}.png"))
+        dialog = SmoothingDialog(w.smoothing_settings, w.data.coords["time"], w)
+        dialog.show()
+        app.processEvents()
+        assert dialog.palette().color(G.QPalette.WindowText).name() == theme["fg"]
+        dialog.grab().save(str(tmp_path / f"dialog-{appearance}.png"))
+        dialog.reject()
+    w.close()
+
+
+@pytest.mark.parametrize("appearance", ["Light", "Dark"])
+def test_appearance_rendering_and_exports(app, tmp_path, appearance, monkeypatch):
+    from matplotlib.colors import to_rgba
+    from lapd_explorer.appearance import colors
+    from lapd_explorer import plotting
+    w = MainWindow()
+    w.appearance.setCurrentText(appearance)
+    t = np.arange(64)*1e-6
+    wave = np.sin(np.arange(64)*.3)*1e-7
+    for spatial in (True, False):
+        data = (Dataset({"A": np.tile(wave, (4, 1))}, ("z", "time"),
+                        {"z": np.arange(4), "time": t}) if spatial else
+                Dataset({"A": wave, "B": wave*2}, ("time",), {"time": t}))
+        w.set_data(data)
+        w.show()
+        w.draw()
+        w.canvas.draw()
+        w.grab().save(str(tmp_path / f"{'line' if spatial else 'point'}-{appearance}.png"))
+        for ax in w.fig.axes:
+            assert ax.xaxis.get_offset_text().get_color() == colors(appearance)["muted"]
+        # Standalone renderer must not depend on the live QApplication palette.
+        opts = w.options()
+        fig = plotting.figure()
+        plotting.render(fig, data, opts)
+        fig._lapd_update_frame(1)
+        np.testing.assert_allclose(fig.get_facecolor(), to_rgba(colors(appearance)["bg"]))
+        fig.clear()
+    saved_colors = []
+    def capture_frame(writer, **kwargs):
+        saved_colors.append(kwargs["facecolor"])
+    monkeypatch.setattr("matplotlib.animation.FFMpegWriter.grab_frame", capture_frame)
+    export_mp4(tmp_path / f"theme-{appearance}.mp4", data, opts, [0, 1], 5)
+    for color in saved_colors:
+        np.testing.assert_allclose(color, to_rgba(colors(appearance)["bg"]))
+    assert len(saved_colors) == 2
+    w.close()
+
+
+def test_theme_text_and_trace_contrast():
+    from matplotlib.colors import to_rgb
+    from lapd_explorer.appearance import THEMES
+    def luminance(color):
+        rgb = np.array(to_rgb(color))
+        linear = np.where(rgb <= .04045, rgb/12.92, ((rgb+.055)/1.055)**2.4)
+        return linear @ np.array([.2126, .7152, .0722])
+    def contrast(a, b):
+        lo, hi = sorted((luminance(a), luminance(b)))
+        return (hi+.05)/(lo+.05)
+    for theme in THEMES.values():
+        for foreground, background in [("fg", "bg"), ("fg", "panel"), ("muted", "bg"),
+                                       ("muted", "panel"), ("fg", "selection"), ("on_accent", "accent")]:
+            assert contrast(theme[foreground], theme[background]) >= 4.5
+        for curve in ("accent", "secondary", "third", "cursor"):
+            assert contrast(theme[curve], theme["panel"]) >= 3

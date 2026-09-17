@@ -12,42 +12,16 @@ from .model import demo, preprocess, quantity
 from . import io, plotting
 from .widgets import Worker, ImportDialog, SmoothingDialog, SliceAxisControls, combo, spin
 from .smoothing import DEFAULT_SMOOTHING
+from .appearance import apply_appearance, colors, stylesheet
 
-STYLE = """
-QWidget { background: #0c1422; color: #e7eef8; font-family: 'Helvetica Neue', 'Segoe UI'; font-size: 12px; }
-QMainWindow { background: #0c1422; }
-QLabel#brand { font-size: 24px; font-weight: 700; letter-spacing: 1px; }
-QLabel#subtitle { color: #8ea4be; font-size: 12px; }
-QLabel#sectionTitle { font-size: 19px; font-weight: 600; }
-QGroupBox { border: 1px solid #26384e; border-radius: 10px; margin-top: 18px; padding: 15px 10px 8px; font-weight: 600; }
-QGroupBox::title { subcontrol-origin: margin; left: 12px; top: 2px; color: #8ea4be; }
-QPushButton { background: #1b2b40; border: 1px solid #30465f; border-radius: 6px; padding: 8px 12px; }
-QPushButton:hover { background: #2b425c; border-color: #46d9c5; }
-QPushButton:disabled { color: #617389; background: #142033; }
-QPushButton#primary { background: #46d9c5; color: #0b2026; font-weight: 700; border: none; }
-QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox { background: #152438; border: 1px solid #30465f; border-radius: 5px; padding: 5px; min-height: 19px; }
-QComboBox:disabled, QSpinBox:disabled { color: #617389; }
-QComboBox QAbstractItemView { selection-background-color: #28505b; }
-QListWidget, QTableWidget { background: #111e30; border: 1px solid #30465f; border-radius: 5px; }
-QListWidget::item { padding: 7px; }
-QListWidget::item:selected { background: #28505b; }
-QHeaderView::section { background: #1b2b40; padding: 6px; border: none; }
-QTabBar::tab { padding: 9px 18px; background: #142033; }
-QTabBar::tab:selected { color: #46d9c5; border-bottom: 2px solid #46d9c5; }
-QSlider::groove:horizontal { height: 5px; background: #26384e; border-radius: 2px; }
-QSlider::handle:horizontal { width: 14px; margin: -5px 0; background: #46d9c5; border-radius: 7px; }
-QCheckBox { spacing: 8px; }
-QStatusBar { color: #8ea4be; border-top: 1px solid #26384e; }
-QScrollArea { border: none; }
-QToolBar { border: none; }
-QProgressBar { border: 1px solid #30465f; border-radius: 4px; text-align: center; }
-QProgressBar::chunk { background: #46d9c5; }
-"""
+# Kept for scripts that import the application's default stylesheet.
+STYLE = stylesheet("Light")
 
 
 class MainWindow(W.QMainWindow):
     def __init__(self):
         super().__init__()
+        apply_appearance(W.QApplication.instance(), "Light")
         self.setWindowTitle("LAPD Explorer")
         self.resize(1480, 960)
         self.raw = self.data = None
@@ -74,6 +48,10 @@ class MainWindow(W.QMainWindow):
         brandcol.addWidget(subtitle)
         top.addLayout(brandcol)
         top.addStretch()
+        top.addWidget(W.QLabel("Appearance"))
+        self.appearance = combo(["Light", "Dark"])
+        self.appearance.setToolTip("Change the application and plot appearance.")
+        top.addWidget(self.appearance)
         for text, callback in [("Open HDF5…", self.open_file), ("Demo", lambda: self.set_data(demo())),
                                ("Run info", self.show_info),
                                ("Save image…", self.save_image), ("Export MP4…", self.export_movie),
@@ -228,7 +206,17 @@ class MainWindow(W.QMainWindow):
         for widget in [*self.slice_boxes, self.sigfigs]:
             widget.valueChanged.connect(self.schedule_draw)
         self.fps.valueChanged.connect(lambda n: self.timer.setInterval(round(1000/n)))
+        self.appearance.currentTextChanged.connect(self.change_appearance)
         self.set_data(demo())
+
+    def change_appearance(self, appearance):
+        apply_appearance(W.QApplication.instance(), appearance)
+        # Refresh toolbar icons for Matplotlib versions that cache their color.
+        for _, _, image_file, callback in self.toolbar.toolitems:
+            if image_file and callback in self.toolbar._actions:
+                self.toolbar._actions[callback].setIcon(self.toolbar._icon(image_file + ".png"))
+        self.fig.set_facecolor(colors(appearance)["bg"])
+        self.schedule_draw()
 
     def launch(self, fn, done, message):
         self.stop_play()
@@ -389,6 +377,7 @@ class MainWindow(W.QMainWindow):
         if mode == "Vector" and len(self.data.spatial_dims) != 2:
             raise ValueError("Vector arrows require a plane. Use Magnitude for point or line acquisitions.")
         return dict(names=names, mode=mode, case=self.case.value(), shot=self.shot.value(),
+                    appearance=self.appearance.currentText(),
                     slices=[w.value() for w in self.slice_boxes], time=self.slider.value(),
                     time_unit=self.time_unit.currentText(), sigfigs=self.sigfigs.value(),
                     lock=self.lock.isChecked(), cmap=self.cmap.currentText(), arrow_cmap=self.arrow_cmap.currentText(),
@@ -457,7 +446,7 @@ class MainWindow(W.QMainWindow):
             self.stop_play()
             self._render_key = None
             self.fig.clear()
-            self.fig.text(.5, .5, str(exc), ha="center", color=plotting.FG, fontsize=12, wrap=True)
+            self.fig.text(.5, .5, str(exc), ha="center", color=colors(self.appearance.currentText())["fg"], fontsize=12, wrap=True)
             self.canvas.draw_idle()
             self.statusBar().showMessage(str(exc))
 
@@ -495,7 +484,7 @@ class MainWindow(W.QMainWindow):
         if path:
             try:
                 self.draw()
-                self.fig.savefig(path, dpi=200, facecolor=plotting.BG)
+                self.fig.savefig(path, dpi=200, facecolor=self.fig.get_facecolor())
                 self.statusBar().showMessage(f"Saved {path}")
             except Exception as exc:
                 self.error(str(exc))
@@ -571,7 +560,7 @@ def export_mp4(path, data, opts, frames, fps, values=None, cancel=None):
     from matplotlib.animation import FFMpegWriter
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     import imageio_ffmpeg
-    fig = plotting.figure()
+    fig = plotting.figure(opts.get("appearance", "Light"))
     FigureCanvasAgg(fig)
     try:
         with mpl.rc_context({"animation.ffmpeg_path": imageio_ffmpeg.get_ffmpeg_exe()}):
@@ -584,7 +573,7 @@ def export_mp4(path, data, opts, frames, fps, values=None, cancel=None):
                         plotting.render(fig, data, dict(opts, time=frame), values)
                     else:
                         fig._lapd_update_frame(frame)
-                    writer.grab_frame(facecolor=plotting.BG)
+                    writer.grab_frame(facecolor=fig.get_facecolor())
     finally:
         fig.clear()
 

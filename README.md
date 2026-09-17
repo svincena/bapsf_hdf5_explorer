@@ -23,6 +23,8 @@ lapd-explorer
 
 The application starts with a synthetic two-component plane wave. **Open HDF5…** loads an acquisition; **Demo** restores the demonstration. Source files are opened read-only. Processing always starts from the imported original, so pressing Apply twice does not integrate twice.
 
+**Appearance** in the top bar switches between **Light** (the startup default) and **Dark**. The choice applies immediately to controls, dialogs, toolbar icons, plots, labels, legends and colorbars. Trace and cursor colors are chosen for each background, and map cursors/vector arrows have contrasting outlines. Images and movies use the selected appearance. Changing appearance preserves loaded/processed data, colormap choices and slice-axis settings.
+
 ## Features
 
 - Digitizer, ADC, configuration and channel discovery through `bapsflib.lapd.File`.
