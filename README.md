@@ -147,3 +147,56 @@ Selected data are held in memory. Use the first/stop record controls for large a
 - `app.py`: desktop workflow, animation and exports.
 
 API behavior was checked against the installed bapsflib 2026.4.0 and its [official LAPD documentation](https://bapsflib.readthedocs.io/en/latest/using_lapd/main.html).
+
+### Langmuir probe analysis
+
+Import both digitizer channels in volts, then select **Langmuir…** in the top
+bar. Analysis uses the original imported channels, independent of the main
+browser's integration, smoothing or shot averaging. The initial representative
+position, case and repeat come from the browser's current selection (including
+nearest-point spatial clicks). Every non-time index is also editable in the
+Langmuir dialog; the recorded global shot number is displayed when available.
+
+1. Assign `V_sweep` and `I_sweep`. Attenuation entries are **multipliers**:
+   `V_probe = V_digitizer × V_attenuation`. Current is
+   `(I_digitizer − offset_volts) × I_attenuation / resistance_ohms`, with optional
+   sign inversion so electron current is positive. Enter collection area in mm².
+   The adapter passes current in **A**, voltage in **V**, and area in **m²** to
+   `langmuir_analysis_core.analyze_iv_trace`; the core calculates density itself.
+2. Use **Configure current offset…** to select a zero-current interval in a
+   separate window or enter a known constant in **digitizer volts**. The recorded
+   interval's mean is subtracted independently for every trace. With no correction,
+   explicitly confirm that current zero was independently calibrated. The ion
+   saturation branch is not a zero-current reference.
+3. Drag horizontally on either representative trace to select a rising sweep.
+   Both plots share the highlighted interval. Start/end times in ms and inclusive,
+   zero-based sample indices are synchronized to recorded samples. Toolbar zoom
+   and pan update those bounds, and editing the bounds updates both plots. Home,
+   Back and Forward also update the analyzed interval. Limits snap to recorded
+   samples and stay within the recording. This works in the offset dialog too.
+   Select an interval containing enough of the ion,
+   retarding and electron branches for the core to fit; exclude the rapid return.
+4. Adjust voltage binning, Vp smoothing, electron-saturation method, temperature
+   range, fit R², fit margins/current floor, minimum fit points and ion SNR as
+   needed. Ideal-model checks are optional and disabled by default, matching the
+   supplied core.
+5. **Process This Shot** displays Te (eV), ne (m⁻³), Vp (V), Vf (V), and any
+   model notes. **Process All Shots** processes all locations, cases and repeats
+   in a background worker. Rejected fits become NaN; the summary shows the failure
+   count and first 20 reasons (all failures remain in the in-memory result).
+   Processing can be canceled without replacing previous completed results.
+6. The derived-quantity selector switches among cached results without refitting.
+   Plane data use color maps and spatial slices, line scans use spatial curves,
+   and point acquisitions show estimates by stored shot coordinate. Clicking a
+   result map/line selects the nearest representative location. Results are one
+   estimate per sweep interval, not a time-resolved series.
+
+**Reset View** restores the full recorded time range in both the plots and the
+analysis interval, retaining calibration, offset and fitting settings.
+**Exit to Main** retains the dialog,
+settings and computed results for reopening in the same session. Changing analysis
+settings invalidates cached results; loading a different dataset discards the old
+results and adapts the interval/index controls to the new recording. Settings are
+session-local, not saved across application restarts. The original HDF5 data and
+main-browser processing remain unchanged. The numerical physics implementation
+in `langmuir_analysis_core.py` is used unchanged.
