@@ -148,6 +148,20 @@ Selected data are held in memory. Use the first/stop record controls for large a
 
 API behavior was checked against the installed bapsflib 2026.4.0 and its [official LAPD documentation](https://bapsflib.readthedocs.io/en/latest/using_lapd/main.html).
 
+### Spectral analysis
+
+Select one or two channels using the existing component selectors (unused
+components **None**), then open **Spectral Analysis…**. The tool uses the current
+processed dataset and preserves spatial geometry, cases, and stored shots.
+It provides Welch auto/cross-power, coherency, coherence, cross-phase, and
+lag-domain covariance, with synchronized graphical/numerical interval selection.
+Process a representative point or all locations in the background, then inspect
+cached spectra and spatial fields. Separate phase and frequency animations
+support scalar projections and coherent vector components.
+
+See [the spectral workflow and numerical conventions](docs/spectral.md) for
+normalization, phase signs, shot averaging, amplitude interpretation, and controls.
+
 ### Langmuir probe analysis
 
 Import both digitizer channels in volts, then select **Langmuir…** in the top

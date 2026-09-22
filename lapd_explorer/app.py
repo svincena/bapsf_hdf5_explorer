@@ -28,6 +28,8 @@ class MainWindow(W.QMainWindow):
         self.jobs = []
         self.langmuir_settings = None
         self.langmuir_dialog = None
+        self.spectral_settings = None
+        self.spectral_dialog = None
         self._values = None
         self._slice_views = [None, None]
         self._busy = False
@@ -57,6 +59,7 @@ class MainWindow(W.QMainWindow):
         for text, callback in [("Open HDF5…", self.open_file), ("Demo", lambda: self.set_data(demo())),
                                ("Run info", self.show_info),
                                ("Langmuir…", self.open_langmuir),
+                               ("Spectral Analysis…", self.open_spectral),
                                ("Save image…", self.save_image), ("Export MP4…", self.export_movie),
                                ("Save data…", self.save_data)]:
             button = W.QPushButton(text)
@@ -359,6 +362,38 @@ class MainWindow(W.QMainWindow):
             dialog.draw_results()
         self.langmuir_dialog.exec()
 
+    def open_spectral(self):
+        from .spectral import Settings, sampling_rate
+        from .spectral_gui import SpectralDialog
+        self.stop_play()
+        try:
+            # The existing component assignments are also the spectral inputs:
+            # Scalar/Absolute = scalar pair, Magnitude/Vector = vector pair.
+            names = tuple(w.currentText() for w in self.components if w.currentText() not in ("", "None"))
+            if len(names) not in (1, 2) or len(set(names)) != len(names):
+                raise ValueError("Spectral Analysis needs one or two distinct channels. Set unused components to None.")
+            sampling_rate(self.data.coords["time"])
+            vector = self.mode.currentText() in ("Magnitude", "Vector") and len(names) == 2
+            if self.spectral_settings is None:
+                n = min(256, len(self.data.coords["time"]))
+                self.spectral_settings = Settings(nperseg=n, nfft=n, overlap=n//2,
+                                                   max_lag=min(128, len(self.data.coords["time"])-1))
+            selection = dict(case=self.case.value(), shot=self.shot.value())
+            selection.update({d: self.slice_boxes[i].value() for i, d in enumerate(self.data.spatial_dims)})
+            dialog = self.spectral_dialog
+            if dialog is None or dialog.data is not self.data or dialog.names != names or dialog.vector != vector:
+                if dialog is not None:
+                    dialog.deleteLater()
+                self.spectral_dialog = dialog = SpectralDialog(
+                    self.data, names, vector, self.spectral_settings, selection, self.appearance.currentText(), self)
+            else:
+                dialog.update_appearance(self.appearance.currentText())
+                for d, widget in dialog.indices.items():
+                    widget.setValue(min(selection.get(d, 0), widget.maximum()))
+            dialog.exec()
+        except ValueError as exc:
+            self.error(str(exc))
+
     def configure_smoothing(self):
         dialog = SmoothingDialog(self.smoothing_settings, self.raw.coords["time"], self)
         if dialog.exec() == W.QDialog.Accepted:
@@ -561,11 +596,15 @@ class MainWindow(W.QMainWindow):
 
     def closeEvent(self, event):
         langmuir_worker = getattr(self.langmuir_dialog, "worker", None)
-        if any(job.isRunning() for job in self.jobs) or (langmuir_worker is not None and langmuir_worker.isRunning()):
+        spectral_worker = getattr(self.spectral_dialog, "worker", None)
+        if any(job.isRunning() for job in self.jobs) or any(
+                worker is not None and worker.isRunning() for worker in (langmuir_worker, spectral_worker)):
             self.statusBar().showMessage("Wait for the active operation to finish before closing.")
             event.ignore()
         else:
             self.stop_play()
+            if self.spectral_dialog is not None:
+                self.spectral_dialog.stop_play()
             super().closeEvent(event)
 
 
