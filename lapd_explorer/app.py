@@ -26,6 +26,8 @@ class MainWindow(W.QMainWindow):
         self.resize(1480, 960)
         self.raw = self.data = None
         self.jobs = []
+        self.langmuir_settings = None
+        self.langmuir_dialog = None
         self._values = None
         self._slice_views = [None, None]
         self._busy = False
@@ -54,6 +56,7 @@ class MainWindow(W.QMainWindow):
         top.addWidget(self.appearance)
         for text, callback in [("Open HDF5…", self.open_file), ("Demo", lambda: self.set_data(demo())),
                                ("Run info", self.show_info),
+                               ("Langmuir…", self.open_langmuir),
                                ("Save image…", self.save_image), ("Export MP4…", self.export_movie),
                                ("Save data…", self.save_data)]:
             button = W.QPushButton(text)
@@ -335,6 +338,27 @@ class MainWindow(W.QMainWindow):
         self.source.setText(f"{data.source}   |   " + " × ".join(f"{d}: {n}" for d, n in zip(data.dims, data.shape)))
         self.history.setText(" → ".join(data.history) or "Original data")
 
+    def open_langmuir(self):
+        from .langmuir import Settings
+        from .langmuir_gui import LangmuirDialog
+        self.stop_play()
+        if self.langmuir_settings is None:
+            self.langmuir_settings = Settings()
+        selection = dict(case=self.case.value(), shot=self.shot.value())
+        selection.update({d: self.slice_boxes[i].value() for i, d in enumerate(self.data.spatial_dims)})
+        if self.langmuir_dialog is None or self.langmuir_dialog.data is not self.raw:
+            if self.langmuir_dialog is not None:
+                self.langmuir_dialog.deleteLater()
+            self.langmuir_dialog = LangmuirDialog(self.raw, self.langmuir_settings, selection,
+                                                 self.appearance.currentText(), self)
+        else:
+            dialog = self.langmuir_dialog
+            dialog.update_appearance(self.appearance.currentText())
+            for d, widget in dialog.indices.items():
+                widget.setValue(min(selection.get(d, 0), widget.maximum()))
+            dialog.draw_results()
+        self.langmuir_dialog.exec()
+
     def configure_smoothing(self):
         dialog = SmoothingDialog(self.smoothing_settings, self.raw.coords["time"], self)
         if dialog.exec() == W.QDialog.Accepted:
@@ -536,7 +560,8 @@ class MainWindow(W.QMainWindow):
         progress.show()
 
     def closeEvent(self, event):
-        if any(job.isRunning() for job in self.jobs):
+        langmuir_worker = getattr(self.langmuir_dialog, "worker", None)
+        if any(job.isRunning() for job in self.jobs) or (langmuir_worker is not None and langmuir_worker.isRunning()):
             self.statusBar().showMessage("Wait for the active operation to finish before closing.")
             event.ignore()
         else:

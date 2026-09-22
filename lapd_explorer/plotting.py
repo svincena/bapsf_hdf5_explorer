@@ -239,3 +239,50 @@ def draw_psd(ax, trace, data, theme=None):
         ax.set(title="Welch power spectrum", xlabel="Frequency (kHz)", ylabel=f"{data.units}²/Hz")
     except ValueError as exc:
         ax.text(.1, .5, str(exc), wrap=True, transform=ax.transAxes, color=theme["muted"])
+
+
+def render_derived(fig, data, name, *, case=0, shot=0, slices=(), cmap="viridis", appearance="Light"):
+    """Static sweep estimates: same maps/slices as the browser, without a fake time trace."""
+    fig.clear()
+    theme = colors(appearance)
+    fig.set_facecolor(theme["bg"])
+    spatial = data.spatial_dims
+    values = data.selected(name, case, shot)[..., 0]
+    if len(spatial) == 2:
+        gs = fig.add_gridspec(2, 2, width_ratios=[2, 1])
+        ax = fig.add_subplot(gs[:, 0])
+        horizontal, vertical = fig.add_subplot(gs[0, 1]), fig.add_subplot(gs[1, 1])
+        y, x = (data.coords[d] for d in spatial)
+        iy, ix = slices[:2]
+        lo, hi = finite_limits(values)
+        mesh = ax.pcolormesh(x, y, values, shading="nearest", cmap=cmap, vmin=lo, vmax=hi)
+        cb = fig.colorbar(mesh, ax=ax)
+        cb.set_label(data.units)
+        ax.set_aspect("equal", adjustable="box")
+        ax.set(xlabel=f"{spatial[1]} ({data.spatial_units})", ylabel=f"{spatial[0]} ({data.spatial_units})")
+        map_cursor(ax.axvline(x[ix], ls="--", lw=.9))
+        map_cursor(ax.axhline(y[iy], ls="--", lw=.9))
+        horizontal.plot(x, values[iy, :])
+        horizontal.set(xlabel=f"{spatial[1]} ({data.spatial_units})", ylabel=data.units, title=f"{spatial[0]}={y[iy]:g}")
+        vertical.plot(y, values[:, ix])
+        vertical.set(xlabel=f"{spatial[0]} ({data.spatial_units})", ylabel=data.units, title=f"{spatial[1]}={x[ix]:g}")
+    else:
+        ax = fig.add_subplot(111)
+        if spatial:
+            d = spatial[0]
+            ax.plot(data.coords[d], values, marker=".")
+            ax.axvline(data.coords[d][slices[0]], ls="--", lw=.9)
+            ax.set_xlabel(f"{d} ({data.spatial_units})")
+        else:
+            key = tuple(case if d == "case" else slice(None) if d == "shot" else 0 for d in data.dims)
+            points = np.atleast_1d(data.channels[name][key])
+            ax.plot(data.coords.get("shot", [0]), points, marker="o")
+            ax.set_xlabel("Stored shot coordinate")
+        ax.set_ylabel(data.units)
+    for axis in fig.axes:
+        style(axis, theme)
+    if len(spatial) == 2:
+        ax.grid(False)
+        cb.ax.grid(False)
+    ax.set_title(f"{name} · sweep interval estimate · case {case}, shot {shot}")
+    return ax
