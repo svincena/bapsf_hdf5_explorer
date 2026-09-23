@@ -1,6 +1,7 @@
 """Qt workers and the acquisition import dialog."""
 from PySide6 import QtCore as C, QtWidgets as W
 from . import io
+from .appearance import FacilityLogo
 
 
 class Worker(C.QThread):
@@ -40,9 +41,15 @@ class ImportDialog(W.QDialog):
         self.setWindowTitle("Import acquisition")
         self.resize(780, 760)
         layout = W.QVBoxLayout(self)
+        header = W.QHBoxLayout()
         title = W.QLabel("Map your acquisition")
         title.setObjectName("sectionTitle")
-        layout.addWidget(title)
+        header.addWidget(title)
+        header.addStretch()
+        appearance = parent.appearance.currentText() if parent is not None and hasattr(parent, "appearance") else "Light"
+        self.facility_logo = FacilityLogo(appearance, height=46)
+        header.addWidget(self.facility_logo)
+        layout.addLayout(header)
         hint = W.QLabel("Select 1–3 channels, then describe the stored records. Time must be the last raw axis.")
         hint.setWordWrap(True)
         layout.addWidget(hint)

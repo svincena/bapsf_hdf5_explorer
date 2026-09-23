@@ -22,6 +22,11 @@ def test_gui_linked_slices_processing_point_line_and_movie(app, tmp_path):
     w.show()
     w.draw()
     app.processEvents()
+    assert w.facility_logo.variant == "Color"
+    assert w.facility_logo.height() == 56
+    w.appearance.setCurrentText("Dark")
+    assert w.facility_logo.variant == "White"
+    w.appearance.setCurrentText("Light")
     w.mode.setCurrentText("Vector")
     w.draw()
     assert w._values.shape == (25, 31, 160)
@@ -84,6 +89,8 @@ def test_import_dialog_applies_shot_guess_and_keeps_fields_editable(app, monkeyp
                        "position_field": "xyz_target"},
     )
     dialog = ImportDialog("fake.h5", info)
+    assert dialog.facility_logo.variant == "Black"
+    assert dialog.facility_logo.height() == 46
     dialog.start_guess()
     while dialog.guess_worker.isRunning():
         app.processEvents()

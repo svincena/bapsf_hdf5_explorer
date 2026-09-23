@@ -5,7 +5,7 @@ a = Analysis(
     ['build_launcher.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('lapd_explorer/assets', 'lapd_explorer/assets')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
