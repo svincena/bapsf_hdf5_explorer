@@ -6,7 +6,7 @@ from PySide6 import QtCore as C, QtWidgets as W
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.widgets import SpanSelector
 from . import langmuir as analysis, plotting
-from .appearance import colors
+from .appearance import FacilityLogo, colors
 from .widgets import Worker, combo, spin
 
 
@@ -237,6 +237,14 @@ class LangmuirDialog(W.QDialog):
         self.worker = None
         self.cancel_event = threading.Event()
         layout = W.QVBoxLayout(self)
+        header = W.QHBoxLayout()
+        title = W.QLabel("Langmuir probe analysis")
+        title.setObjectName("sectionTitle")
+        header.addWidget(title)
+        header.addStretch()
+        self.facility_logo = FacilityLogo(appearance, height=46)
+        header.addWidget(self.facility_logo)
+        layout.addLayout(header)
         split = W.QSplitter()
         layout.addWidget(split, 1)
         scroll = W.QScrollArea()
@@ -511,6 +519,7 @@ class LangmuirDialog(W.QDialog):
 
     def update_appearance(self, appearance):
         self.appearance = appearance
+        self.facility_logo.set_appearance(appearance)
         self.trace_view.appearance = appearance
         theme = colors(appearance)
         self.trace_view.fig.set_facecolor(theme["bg"])

@@ -12,7 +12,7 @@ from .model import demo, preprocess, quantity
 from . import io, plotting
 from .widgets import Worker, ImportDialog, SmoothingDialog, SliceAxisControls, combo, spin
 from .smoothing import DEFAULT_SMOOTHING
-from .appearance import apply_appearance, colors, stylesheet
+from .appearance import FacilityLogo, apply_appearance, colors, stylesheet
 
 # Kept for scripts that import the application's default stylesheet.
 STYLE = stylesheet("Light")
@@ -51,6 +51,9 @@ class MainWindow(W.QMainWindow):
         brandcol.addWidget(brand)
         brandcol.addWidget(subtitle)
         top.addLayout(brandcol)
+        top.addSpacing(14)
+        self.facility_logo = FacilityLogo("Light", height=56, colorful=True)
+        top.addWidget(self.facility_logo, 0, C.Qt.AlignVCenter)
         top.addStretch()
         top.addWidget(W.QLabel("Appearance"))
         self.appearance = combo(["Light", "Dark"])
@@ -217,6 +220,7 @@ class MainWindow(W.QMainWindow):
 
     def change_appearance(self, appearance):
         apply_appearance(W.QApplication.instance(), appearance)
+        self.facility_logo.set_appearance(appearance)
         # Refresh toolbar icons for Matplotlib versions that cache their color.
         for _, _, image_file, callback in self.toolbar.toolitems:
             if image_file and callback in self.toolbar._actions:

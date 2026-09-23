@@ -1,5 +1,7 @@
 # LAPD Explorer
 
+<img src="lapd_explorer/assets/BaPSF_Logo+Name_Color_RGB.png" alt="Basic Plasma Science Facility" width="300">
+
 LAPD Explorer is a cross-platform Python desktop application for inspecting,
 processing, visualizing, and exporting BaPSF / Large Plasma Device (LAPD) HDF5
 time-series data. It uses PySide6, Matplotlib, NumPy, SciPy, and `bapsflib`.
@@ -421,3 +423,11 @@ API behavior has been checked against `bapsflib` 2026.4.0 and its
 Irregular point clouds and volume scans are not supported. Raw import assumes a
 final time axis. Calibration, arbitrary per-shot parameter tables, per-channel
 time-offset correction, and out-of-core processing remain extension points.
+
+## Credits
+
+This tool was developed at the Basic Plasma Science Facility, which is a
+Collaborative Research Facility funded by the U.S. Department of Energy.
+
+LAPD Explorer was vibe coded by Stephen Vincena with the aid of OpenAI Codex
+using Astra and Sol models.

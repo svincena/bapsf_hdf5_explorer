@@ -5,7 +5,7 @@ import numpy as np
 from PySide6 import QtCore as C, QtWidgets as W
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from . import spectral as analysis, plotting
-from .appearance import colors
+from .appearance import FacilityLogo, colors
 from .langmuir_gui import IntervalEditor, TraceView
 from .widgets import Worker, combo, spin
 
@@ -38,6 +38,14 @@ class SpectralDialog(W.QDialog):
         self.timer = C.QTimer(self)
         self.timer.timeout.connect(self.advance)
         layout = W.QVBoxLayout(self)
+        header = W.QHBoxLayout()
+        title = W.QLabel("Spectral analysis")
+        title.setObjectName("sectionTitle")
+        header.addWidget(title)
+        header.addStretch()
+        self.facility_logo = FacilityLogo(appearance, height=46)
+        header.addWidget(self.facility_logo)
+        layout.addLayout(header)
         description = " · ".join(f"{c}: {n}" for c, n in zip("AB", names))
         note = W.QLabel(description + (" · Vector components" if vector else " · Scalar inputs") +
                         "\nUses the browser's currently processed data. " + (" → ".join(data.history) or "Original data") +
@@ -593,6 +601,7 @@ class SpectralDialog(W.QDialog):
 
     def update_appearance(self, appearance):
         self.appearance = appearance
+        self.facility_logo.set_appearance(appearance)
         self.trace_view.fig.set_facecolor(colors(appearance)["bg"])
         for ax in self.trace_view.axes:
             plotting.style(ax, colors(appearance))

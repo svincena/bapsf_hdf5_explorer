@@ -1,6 +1,10 @@
-"""Shared appearance colors for Qt and independently rendered figures."""
+"""Shared appearance colors and branding for Qt and rendered figures."""
 from string import Template
 from pathlib import Path
+from PySide6 import QtCore as C, QtGui as G, QtWidgets as W
+
+
+ASSET_DIR = Path(__file__).parent / "assets"
 
 THEMES = {
     "Light": dict(bg="#f3f6fa", panel="#ffffff", fg="#18283d", muted="#506176",
@@ -19,7 +23,7 @@ def colors(appearance="Light"):
 
 
 def stylesheet(appearance="Light"):
-    c = dict(colors(appearance), check=(Path(__file__).parent / "assets" / f"check-{appearance.lower()}.svg").as_posix())
+    c = dict(colors(appearance), check=(ASSET_DIR / f"check-{appearance.lower()}.svg").as_posix())
     return Template("""QWidget { background: $bg; color: $fg; font-family: 'Helvetica Neue', 'Segoe UI'; font-size: 12px; }
 QLabel#brand { font-size: 24px; font-weight: 700; letter-spacing: 1px; }
 QLabel#subtitle { color: $muted; font-size: 12px; }
@@ -54,9 +58,36 @@ QProgressBar::chunk { background: $accent; }
 """).substitute(c)
 
 
+class FacilityLogo(W.QLabel):
+    """Compact, theme-aware BaPSF wordmark rendered from the source PNG."""
+
+    def __init__(self, appearance="Light", height=48, colorful=False, parent=None):
+        super().__init__(parent)
+        self.display_height = height
+        self.colorful = colorful
+        self.variant = ""
+        self.setAlignment(C.Qt.AlignCenter)
+        self.setSizePolicy(W.QSizePolicy.Fixed, W.QSizePolicy.Fixed)
+        self.setAccessibleName("Basic Plasma Science Facility")
+        self.setToolTip("Basic Plasma Science Facility")
+        self.set_appearance(appearance)
+
+    def set_appearance(self, appearance):
+        variant = "White" if appearance == "Dark" else "Color" if self.colorful else "Black"
+        self.variant = variant
+        pixmap = G.QPixmap(str(ASSET_DIR / f"BaPSF_Logo+Name_{variant}_RGB.png"))
+        if pixmap.isNull():
+            self.setText("BaPSF")
+            self.setFixedSize(90, self.display_height)
+            return
+        pixmap = pixmap.scaledToHeight(self.display_height, C.Qt.SmoothTransformation)
+        self.setText("")
+        self.setPixmap(pixmap)
+        self.setFixedSize(pixmap.size())
+
+
 def apply_appearance(app, appearance="Light"):
     """Set native-control colors too, including icons, checkboxes and dialogs."""
-    from PySide6 import QtGui as G
     c = colors(appearance)
     palette = G.QPalette()
     for role, key in {"Window": "bg", "WindowText": "fg", "Base": "panel", "AlternateBase": "inactive",
