@@ -8,13 +8,13 @@ ASSET_DIR = Path(__file__).parent / "assets"
 
 THEMES = {
     "Light": dict(bg="#f3f6fa", panel="#ffffff", fg="#18283d", muted="#506176",
-                  accent="#007f78", secondary="#405bd8", third="#a54479", cursor="#a95300",
+                  accent="#1d5fa7", secondary="#6846b7", third="#a54479", cursor="#a95300",
                   border="#c7d2df", field="#ffffff", button="#e6edf5", hover="#d8e5ef",
-                  disabled="#64748b", inactive="#e8edf3", selection="#d4ece9", on_accent="#ffffff"),
+                  disabled="#64748b", inactive="#e8edf3", selection="#dbeafe", on_accent="#ffffff"),
     "Dark": dict(bg="#0c1422", panel="#111e30", fg="#e7eef8", muted="#9aadc4",
-                 accent="#46d9c5", secondary="#91aaff", third="#f2a0cf", cursor="#ffc577",
+                 accent="#66b3ff", secondary="#b69cff", third="#f2a0cf", cursor="#ffc577",
                  border="#30465f", field="#152438", button="#1b2b40", hover="#2b425c",
-                 disabled="#8797ab", inactive="#142033", selection="#28505b", on_accent="#0b2026"),
+                 disabled="#8797ab", inactive="#142033", selection="#193b63", on_accent="#071a33"),
 }
 
 
