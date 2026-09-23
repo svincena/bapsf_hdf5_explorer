@@ -1,4 +1,8 @@
-"""Validate the full supplied 51×51 plane through the actual import dialog."""
+"""Validate the supplied 51×51 plane and refresh its Light-mode screenshot.
+
+Run from the project root. See docs/development.md for Windows instructions:
+  QT_QPA_PLATFORM=offscreen .venv/bin/python scripts/verify_plane.py /path/to/file.hdf5
+"""
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -32,6 +36,7 @@ while dialog.dataset is None and time.monotonic() < deadline:
     time.sleep(.01)
 assert dialog.dataset is not None
 raw = dialog.dataset
+raw.source = Path(path).name
 assert raw.dims == ('y','x','shot','time')
 assert raw.shape == (51,51,5,6144)
 assert np.unique(raw.shot_numbers).size == 13005
@@ -53,6 +58,7 @@ with lapd.File(path) as f:
 print('Verified global shot / coordinate / signal alignment against direct reads.',flush=True)
 w=MainWindow()
 w.set_data(raw)
+w.appearance.setCurrentText("Light")
 w.average.setChecked(True)
 w.baseline.setCurrentText('Remove mean')
 w.processed(preprocess(raw,average=True,baseline='Remove mean'))

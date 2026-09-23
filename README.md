@@ -1,216 +1,423 @@
 # LAPD Explorer
 
-A Python desktop application for BaPSF / Large Plasma Device HDF5 time-series data. Built with PySide6, Matplotlib, NumPy, SciPy and bapsflib.
+LAPD Explorer is a cross-platform Python desktop application for inspecting,
+processing, visualizing, and exporting BaPSF / Large Plasma Device (LAPD) HDF5
+time-series data. It uses PySide6, Matplotlib, NumPy, SciPy, and `bapsflib`.
 
-![LAPD Explorer displaying the supplied x-line acquisition](docs/sample-xline.png)
+![LAPD Explorer showing a processed x-line acquisition in Light mode](docs/sample-xline.png)
 
-## Run
+*A real three-channel x-line acquisition after stored-shot averaging and mean
+removal. The application starts in Light mode; Dark mode remains available from
+the Appearance menu.*
 
-The development environment in this directory is already installed:
+## Highlights
+
+- Opens BaPSF acquisitions through `bapsflib.lapd.File`, as well as numeric raw
+  HDF5 datasets and portable HDF5 files previously exported by the application.
+- Maps point, line, and plane acquisitions with named spatial, case, shot, and
+  time axes.
+- Displays scalar, absolute, two/three-component magnitude, and plane-vector
+  views with linked slices and time traces.
+- Applies per-trace baseline removal, detrending, integration, temporal
+  smoothing, gain, and stored-shot averaging without modifying the source file.
+- Provides Welch spectra, cross-spectral analysis, covariance, and Langmuir
+  probe analysis.
+- Exports PNG, SVG, or PDF figures; H.264 MP4 movies; and portable HDF5 data.
+
+## Requirements
+
+- A 64-bit installation of Python 3.11 or newer.
+- macOS, Linux, or Windows with a graphical desktop session.
+- Enough memory for the selected acquisition range. Selected data are held in
+  memory; large files can be limited with the first/stop record controls.
+- Git, if cloning the repository. Git is not needed when using GitHub's
+  **Code → Download ZIP** option.
+
+Python installs the application dependencies, Qt, and the FFmpeg executable used
+for movie export. A separate Qt or FFmpeg installation is normally unnecessary.
+
+## Install from a fresh GitHub download
+
+### 1. Get the source
+
+Clone the repository:
+
+```text
+git clone https://github.com/svincena/bapsf_hdf5_explorer.git
+cd bapsf_hdf5_explorer
+```
+
+Alternatively, download the ZIP from GitHub, extract it, and open a terminal in
+the extracted `bapsf_hdf5_explorer` folder. Every command below must be run from
+that folder—the one containing `pyproject.toml`.
+
+### 2. Create an isolated environment and install
+
+The commands deliberately use the virtual environment's Python directly, so
+activation is optional and Windows PowerShell execution-policy settings do not
+get in the way.
+
+#### macOS
+
+First confirm that `python3 --version` reports 3.11 or newer. If it does not,
+install a current Python from [python.org](https://www.python.org/downloads/macos/)
+or another trusted Python distribution. Then run:
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip setuptools wheel
+.venv/bin/python -m pip install -e .
+```
+
+#### Linux
+
+Install Python, its virtual-environment support, and Git using your distribution's
+package manager if they are not already available. Confirm that
+`python3 --version` reports 3.11 or newer, then run:
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip setuptools wheel
+.venv/bin/python -m pip install -e .
+```
+
+On Debian/Ubuntu, a missing `venv` module is usually supplied by the
+`python3-venv` package. LAPD Explorer must be launched from a graphical session;
+see [Troubleshooting](#troubleshooting) if Qt reports a missing Linux display
+library.
+
+#### Windows (PowerShell or Command Prompt)
+
+Install a current 64-bit Python from
+[python.org](https://www.python.org/downloads/windows/) if needed. The Python
+installer's `py` launcher makes it easy to select Python 3. Verify that
+`py -3 --version` reports 3.11 or newer, then run:
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip setuptools wheel
+.\.venv\Scripts\python.exe -m pip install -e .
+```
+
+If the `py` command is unavailable but `python` reports a suitable version,
+replace `py -3` in the first command with `python`.
+
+### 3. Start the application
+
+On macOS or Linux:
 
 ```sh
 .venv/bin/python -m lapd_explorer
 ```
 
-For a fresh installation (Python 3.11 or newer):
+On Windows:
 
-```sh
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e '.[test]'
-lapd-explorer
+```powershell
+.\.venv\Scripts\python.exe -m lapd_explorer
 ```
 
-The application starts with a synthetic two-component plane wave. **Open HDF5…** loads an acquisition; **Demo** restores the demonstration. Source files are opened read-only. Processing always starts from the imported original, so pressing Apply twice does not integrate twice.
+The installed `lapd-explorer` command is also available inside the virtual
+environment, but `python -m lapd_explorer` is the most dependable form on every
+platform. The application opens with a synthetic two-component plane wave, so
+you can explore the controls without an HDF5 file.
 
-**Appearance** in the top bar switches between **Light** (the startup default) and **Dark**. The choice applies immediately to controls, dialogs, toolbar icons, plots, labels, legends and colorbars. Trace and cursor colors are chosen for each background, and map cursors/vector arrows have contrasting outlines. Images and movies use the selected appearance. Changing appearance preserves loaded/processed data, colormap choices and slice-axis settings.
+### Optional: activate the environment
 
-## Features
+Activation lets you type `python` and `lapd-explorer` without their full paths:
 
-- Digitizer, ADC, configuration and channel discovery through `bapsflib.lapd.File`.
-- One to three channels, with explicit horizontal, vertical and optional third vector-component assignment.
-- Motion coordinates matched to global shot numbers through bapsflib, including **bmotion**. Choose target positions when available or measured positions.
-- Explicit manual axis mapping; point, x/y/z line, or xy/xz/yz plane. Up to two spatial axes, plus independent case, shot and time axes.
-- Per-trace mean removal, linear detrending against time, cumulative trapezoidal integration, gain and averaging over the named shot axis.
-- Scalar values, absolute values, two/three-component magnitude, and plane quiver plots.
-- Independent mesh/arrow color maps: viridis, plasma, inferno, magma, cividis, turbo, RdBu, coolwarm, Spectral, seismic and grayscale; solid-white arrows are also available.
-- Click-to-select spatial slices, numeric slice indices, case/repeat selection, and a linked full time trace.
-- Line position–time preview, Welch power spectrum, and point trace statistics.
-- Time slider, numeric frame selection, playback, selectable s/ms/µs/ns units and significant figures.
-- PNG/SVG/PDF stills, H.264 MP4 with bundled FFmpeg, and portable HDF5 exports preserving named coordinates, units, processing history and acquisition metadata.
-- Background file reads, processing and exports. Data/movie exports replace the destination only after successful completion; canceled movies leave it unchanged.
+| Shell | Command |
+| --- | --- |
+| macOS/Linux (`bash` or `zsh`) | `source .venv/bin/activate` |
+| Windows PowerShell | `.\.venv\Scripts\Activate.ps1` |
+| Windows Command Prompt | `.venv\Scripts\activate.bat` |
 
-## Importing the supplied September 2026 sample
+Run `deactivate` when finished. Activation is a convenience, not an installation
+requirement.
 
-For `04_bdot_port25_xline 2026-09-02 11.39.39.hdf5`:
+## First run
 
-1. Click **Open HDF5…** and select the file.
-2. On **BaPSF / bapsflib**, select board **3**, channels **6, 7, 8** with Cmd-click on macOS or Ctrl-click on Windows/Linux.
-3. Select motion control **bmotion / 3 - <Hermes> p25_C16_Nx91_Lx40cm**.
-4. Keep **Motion coordinates** and **Target if available**. Selecting a channel automatically guesses **1 case** and **5 shots per case**; both values remain editable.
-5. Click **Load acquisition**.
+1. Start with the built-in **Demo** data or select **Open HDF5…**.
+2. For a BaPSF file, select one to three digitizer channels and, when available,
+   a motion control. For a generic file, choose **Raw HDF5**, select numeric
+   datasets, and provide the sample interval and signal units.
+3. Confirm the inferred dimension mapping. Case and shot counts remain editable.
+4. Select **Load acquisition**. Source files are always opened read-only.
+5. Choose the displayed quantity and components, set any preprocessing options,
+   and select **Apply to original data**.
+6. Move through time with the frame control or **Play**. Click a line or plane to
+   move the linked spatial cursor.
+7. Use **Save image…**, **Export MP4…**, or **Save data…** for output.
 
-Validated result: `(x=91, shot=5, time=6144)`, x from −20 to +20 cm, global shots 1–455, sample interval 10 ns. The three channels correspond to Bx, By and Bz in the run notes, but the imported amplitudes are **digitizer volts**. Probe/amplifier calibration is required to obtain magnetic field units. Integration alone produces V·s.
+Processing always starts from the imported original, so applying integration or
+gain twice does not apply the operation twice. **Reset processing** returns to
+the imported values. Changing Light/Dark appearance preserves the data,
+processing, component assignments, colormaps, and slice settings.
 
-The measured positions contain small x/y deviations. Target positions recover the intended one-dimensional acquisition grid. Both target and measured per-record coordinates are retained in exported metadata. The coordinate source used is recorded per channel. Measured-coordinate grouping can be controlled by the decimal-rounding setting; this changes grouping precision and must be chosen relative to the physical scan spacing.
+## Loading BaPSF acquisitions
 
-The time origin defaults to **0 at the first digitizer sample**. Enter a different origin in seconds when a plasma-relative trigger offset is known. No timing offset is inferred from free-text notes.
+The importer discovers digitizers, ADC configurations, channels, and motion
+controls through `bapsflib`. Multiple channels must have compatible record and
+time axes. Use Command-click on macOS or Ctrl-click on Windows/Linux to select
+several channels.
 
-Choose **Average stored shots** and **Remove mean**, then **Apply to original data** for an averaged baseline-corrected view. The sample is a line, so use **Magnitude** to combine components; vector arrows are available for planes. For a shorter movie, increase the frame stride (for example, 24) and select first/last frame indices.
+### Motion mapping
 
-## Verified 2D sample
+Motion grouping requires a complete rectangular grid with the same number of
+records at every position. When a channel is selected, the importer samples the
+records, assumes one case, and fills **Number of shots per case** from repeated
+positions. Replace that guess when the acquisition contains multiple cases.
 
-For `14_bdot_port25_xy_51x51_delta7mm 2026-09-07 10.35.11.hdf5`, select board **3**, channels **6–8**, motion **bmotion / 0 - <Hermes> p25_C16_51x51_deta7mm**, and **Target if available**. The importer fills **1 case** and **5 shots per case**.
+Within each position, acquisition order is interpreted as either `case, shot`
+(shot fastest) or `shot, case` (case fastest). Cases cannot be inferred reliably
+from position and global shot number alone. Single case/shot dimensions are
+removed; the importer never invents statistical repeats.
 
-The complete file was verified as `(y=51, x=51, shot=5, time=6144)`: 13,005 global shots, 0.7 cm spacing, x/y extents −17.5 to +17.5 cm, and 10 ns sampling. Selected mapped signals and coordinates were compared with direct bapsflib reads. The full GUI import, averaged baseline correction, three-component magnitude, plane arrows, click-selected x/y slices, still export and a four-frame MP4 were exercised.
+Target coordinates usually recover the intended scan grid. Measured coordinates
+retain real positioning deviations. Both target and measured per-record
+coordinates are preserved in export metadata, along with the source used for
+each channel. When measured positions are grouped, choose decimal rounding that
+is fine enough for the physical scan spacing.
 
-![Verified plane visualization with linked slices](docs/sample-plane.png)
+Missing grid points, unequal repeats, three-dimensional scans, and mismatched
+vector shot/time axes are rejected. Select a balanced record range or prepare a
+subset and use manual mapping.
 
-The run notes label all three channels “Bx”; the application retains board/channel identifiers and leaves physical component assignment to the user. The verification checks numerical channel combination and arrow rendering, without assuming the notes establish the correct physical vector basis.
+### Manual and raw-HDF5 mapping
 
-Reproduce with:
-
-```sh
-QT_QPA_PLATFORM=offscreen .venv/bin/python scripts/verify_plane.py '/path/to/plane.hdf5'
-```
-
-## Dimension mapping
-
-### Motion
-
-Motion grouping requires a complete rectangular grid with the same record count at every position. When a digitizer channel is selected, the importer reads one time sample per record, counts the spatial positions, assumes one case, and fills **Number of shots per case** from the repeated records at each position. The user can replace that guess with any valid combination of cases and shots. Within each position, the acquisition order is mapped according to `case,shot` (shot fastest) or `shot,case` (case fastest). Cases cannot be inferred reliably from position and global shot number alone.
-
-Missing grid points, unequal repeats, three-dimensional scans and mismatched vector shot/time axes produce an error. Select a balanced record range or use manual mapping after preparing the appropriate subset. Single case/repeat dimensions are removed; a missing shot axis never creates statistical information.
-
-### Manual
-
-Add axes in **slowest-to-fastest acquisition order**, excluding time. Size products must equal the number of records. Start/end specify evenly spaced coordinates; non-singleton axes must increase. Examples:
+Add manual axes in slowest-to-fastest acquisition order, excluding time. The
+axis-size product must equal the number of records. Start/end values describe
+evenly spaced coordinates, and every non-singleton axis must increase.
 
 | Stored layout | Manual axes, in order |
 | --- | --- |
-| A single trace `(nt,)` | No axes |
+| Single trace `(nt,)` | No axes |
 | Point with repeats `(nshot, nt)` | `shot` |
-| Line without stored repeats `(nx, nt)` | `x` |
+| Line without repeats `(nx, nt)` | `x` |
 | Line with repeats `(nx, nshot, nt)` | `x, shot` |
-| Plane with cases and repeats `(ny, nx, ncase, nshot, nt)` | `y, x, case, shot` |
+| Plane with cases/repeats `(ny, nx, ncase, nshot, nt)` | `y, x, case, shot` |
 | Complete plane scanned again for each case | `case, y, x, shot` |
 
-For **Raw HDF5**, select numeric datasets and supply a sample interval and signal units. The final source axis is interpreted as time; all leading axes are flattened before applying the manual mapping. Raw values have no automatic ADC calibration or global shot-number association. A raw `(nx, nt)` dataset must be mapped as x, rather than interpreted as repeated point measurements.
+For **Raw HDF5**, the final source axis is time and all leading axes are flattened
+before manual mapping. Raw values receive no automatic ADC calibration or global
+shot-number association. A raw `(nx, nt)` dataset must therefore be mapped as
+`x`, rather than interpreted as repeated point measurements.
+
+## Verified example acquisitions
+
+The source acquisitions are not included in this repository. These settings are
+recorded so collaborators with the same September 2026 data can reproduce the
+validated imports.
+
+### X-line sample
+
+For `04_bdot_port25_xline 2026-09-02 11.39.39.hdf5`:
+
+1. Select board **3**, channels **6, 7, 8**.
+2. Select motion control **bmotion / 3 - <Hermes> p25_C16_Nx91_Lx40cm**.
+3. Keep **Motion coordinates** and **Target if available**. Selecting a channel
+   should infer **1 case** and **5 shots per case**.
+4. Select **Load acquisition**.
+
+The validated result is `(x=91, shot=5, time=6144)`, with x from -20 to +20 cm,
+global shots 1–455, and a 10 ns sample interval. The channels correspond to Bx,
+By, and Bz in the run notes, but their imported amplitudes are digitizer volts.
+Probe/amplifier calibration is required for magnetic-field units; integration
+alone produces V·s.
+
+The time origin defaults to the first digitizer sample. Enter another origin in
+seconds only when a known plasma-relative trigger offset is available. The
+application does not infer timing offsets from free-text notes.
+
+### Plane sample
+
+For `14_bdot_port25_xy_51x51_delta7mm 2026-09-07 10.35.11.hdf5`, select board
+**3**, channels **6–8**, motion
+**bmotion / 0 - <Hermes> p25_C16_51x51_deta7mm**, and **Target if available**.
+The importer should infer **1 case** and **5 shots per case**.
+
+![LAPD Explorer showing the verified plane acquisition in Light mode](docs/sample-plane.png)
+
+*The verified 51 × 51 plane in Light mode, with independent mesh/arrow colors,
+linked x/y slices, and their all-time vertical scales.*
+
+The complete result was verified as `(y=51, x=51, shot=5, time=6144)`: 13,005
+global shots, 0.7 cm spacing, x/y extents of -17.5 to +17.5 cm, and 10 ns
+sampling. Mapped signals and coordinates were compared with direct `bapsflib`
+reads. The full GUI import, averaged baseline correction, three-component
+magnitude, plane arrows, linked slices, still export, and MP4 export were also
+exercised.
+
+The run notes label all three channels “Bx”. The application preserves the
+board/channel identifiers and leaves physical component assignment to the user;
+the validation does not assume that the notes establish the correct vector
+basis.
 
 ## Processing and interpretation
 
-Operations run in this order: baseline → integration → optional time smoothing → gain → shot average. Integration uses actual time coordinates with initial value zero. Detrending removes an independently fitted linear baseline from each trace. No case or position averaging occurs. Nonfinite values propagate through means/integration; detrending and PSD reject nonfinite traces. No uncertainty estimate is invented for hardware-averaged or single-shot data.
+Operations run in this order:
 
-Enable **Smooth in time** in **02 PREPROCESSING**, then open **Settings…** to choose moving average, Savitzky–Golay, Gaussian, or zero-phase Butterworth filtering. Butterworth offers **Low-pass**, **High-pass**, and **Band-pass** under **Filter type**. Low/high-pass use one cutoff in Hz; band-pass uses lower and upper cutoffs in Hz, with `0 < lower < upper < Nyquist`. Low-pass remains the default. The band-pass design has twice the selected filter order; all three types use forward/backward passes for zero phase. Only the selected method's parameters are shown. Smoothing works on point, line and plane data with any case/shot axes, without mixing traces. It is off by default; reset or loading data disables it and restores defaults. Settings take effect with **Apply to original data** and are recorded in exported processing history, including filter type and cutoff frequencies.
-
-Moving/Savitzky–Golay window lengths and Gaussian sigma are in samples; on irregular grids these operate in sample-index space. Savitzky–Golay requires an odd window larger than the polynomial order and no longer than the trace. Butterworth cutoff is in Hz, with sampling frequency inferred from uniformly spaced time coordinates; invalid cutoffs and traces too short for standard padding are rejected. Moving/Gaussian boundary modes are selectable (constant means zero padding); Savitzky–Golay uses polynomial edges. Missing values may propagate or be interpolated along actual time, extending the nearest finite value at endpoints. Entirely missing traces remain NaN. Interpolation occurs after integration and cannot recover samples lost during earlier preprocessing. Smoothing can change the integrated trace's initial zero value.
-
-Magnitude is computed **after** preprocessing each component. Averaging components before magnitude is different from averaging per-shot magnitudes. Vector arrows show the first two assigned components in the displayed plane; the optional third contributes only to the background magnitude. Select distinct channels with matching physical units/calibration. **Mesh color map** controls the scalar/magnitude background; **Arrow color map** independently colors arrows by the in-plane magnitude of their two assigned components. Colored arrows have a separate scale bar. **Fixed scale across time** locks both color ranges. These choices are preserved in stills and MP4 exports.
-
-Frame stride changes playback/export sampling, not the scientific arrays. All processing, cursor traces and PSD use full time resolution. The line position–time preview subsamples time to approximately 1,000 columns to keep interaction responsive. Playback FPS is a target; achievable rate depends on plot size and hardware.
-
-For planes, each spatial slice plot has independent vertical-axis controls beside it. **Auto — all times** (the default) uses the finite minimum and maximum across every position and time sample in that slice, for the selected quantity, case and shot. Bounds update when the selected slice or processed data changes and stay fixed during playback. Constant slices receive a small range around their value; entirely missing slices use 0–1. **Manual** accepts Min/Max in the displayed signal units, including scientific notation; press Enter or leave the field to apply. Invalid entries keep the previous valid limits. **Interactive** enables the plot toolbar's zoom, pan, Home, back and forward controls; the view persists as time advances and plots redraw. Home restores the full-time slice range. Auto/manual modes keep their vertical limits during toolbar navigation. Stills and movies preserve the selected slice limits. Loading another dataset resets both controls to Auto; these controls appear only for planes and use the actual spatial axis names (including xz/yz planes).
-
-## Export
-
-- **Save image…** captures the full current visualization, including slices/time trace.
-- **Export MP4…** renders the inclusive first/last frame range with the chosen stride and FPS. Case, repeat, slices, processing and component selection remain fixed. Cancel discards the partial movie.
-- **Save data…** writes every currently processed channel, case and spatial point, including its complete time range. It does not crop to the displayed cursor or export-frame range. The resulting HDF5 file can be reopened directly in this application.
-- **Run info** shows acquisition details, dimensions, units and processing history.
-
-## Development and validation
-
-```sh
-QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest -q
-QT_QPA_PLATFORM=offscreen .venv/bin/python -m lapd_explorer --smoke-test
+```text
+baseline → integration → time smoothing → gain → stored-shot average
 ```
 
-To include the supplied sample in the regression suite:
+- Mean removal and linear detrending are applied independently to each trace.
+- Integration is cumulative trapezoidal integration over the actual time
+  coordinates, with initial value zero.
+- Shot averaging never averages cases or spatial positions.
+- Magnitude is calculated after preprocessing each component. Averaging
+  components before magnitude is not equivalent to averaging per-shot
+  magnitudes.
+- Nonfinite values propagate through means and integration. Detrending and PSD
+  reject nonfinite traces. No uncertainty is invented for hardware-averaged or
+  single-shot data.
 
-```sh
-LAPD_SAMPLE_FILE='/path/to/04_bdot_port25_xline 2026-09-02 11.39.39.hdf5' \
-QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest -q
-```
+### Temporal smoothing
 
-`scripts/verify_sample.py /path/to/sample.hdf5` exercises the actual import dialog, preprocessing, plotting and movie export. It refreshes `docs/sample-xline.png` and writes a short verification movie to the system temporary directory.
+Enable **Smooth in time**, then open **Settings…** to choose moving average,
+Savitzky–Golay, Gaussian, or zero-phase Butterworth filtering. Butterworth
+supports low-pass, high-pass, and band-pass filters. Cutoffs are in Hz and must
+be below the Nyquist frequency; a band-pass also requires lower < upper.
 
-The tests cover numerical integration/detrending, named-axis averaging, vector magnitude, spectra, motion grouping and shot provenance, manual mapping, HDF5 round-trips, real bapsflib synthetic-file reading, GUI slices, and MP4 export. The supplied sample is an optional integration test; the source acquisition is not bundled.
+Moving/Savitzky–Golay windows and Gaussian sigma are in samples. They operate in
+sample-index space on irregular grids. Butterworth sampling frequency is inferred
+from uniformly spaced time coordinates. Missing values may propagate or be
+interpolated along time; entirely missing traces remain NaN. All selected filter
+settings are written to exported processing history.
 
-Selected data are held in memory. Use the first/stop record controls for large acquisitions. Irregular point clouds and volume scans are outside this application's current scope. Raw import assumes a final time axis. Calibration, arbitrary per-shot parameter tables, per-channel time-offset correction and out-of-core processing are extension points.
+### Plots and playback
 
-## Code map
+Vector arrows use the first two assigned components in the displayed plane. A
+third component contributes only to the magnitude background. Use channels with
+matching physical units and calibration. Mesh and arrow colormaps are
+independent; colored arrows receive their own scale bar. **Fixed scale across
+time** locks both color ranges.
 
-- `model.py`: validated named-axis dataset, preprocessing, scalar/vector quantities and PSD.
-- `io.py`: bapsflib acquisition adapter, motion/manual mapping, raw import and portable HDF5.
-- `widgets.py`: background worker and import dialog.
-- `plotting.py`: shared plotting renderer with frame updates.
-- `app.py`: desktop workflow, animation and exports.
+Frame stride changes playback/export sampling only. Processing, cursor traces,
+and PSD use the full time resolution. The line position–time preview may
+subsample its display to remain responsive.
 
-API behavior was checked against the installed bapsflib 2026.4.0 and its [official LAPD documentation](https://bapsflib.readthedocs.io/en/latest/using_lapd/main.html).
+For planes, each slice has its own vertical-axis control:
+
+- **Auto — all times** uses the finite range across every position and time in
+  that slice for the current quantity, case, and shot.
+- **Manual** accepts explicit minimum/maximum values in displayed signal units.
+- **Interactive** preserves toolbar zoom/pan as time advances; **Home** restores
+  the full-time slice range.
+
+Still images and movies preserve the selected slice limits.
+
+## Analysis tools
 
 ### Spectral analysis
 
-Select one or two channels using the existing component selectors (unused
-components **None**), then open **Spectral Analysis…**. The tool uses the current
-processed dataset and preserves spatial geometry, cases, and stored shots.
-It provides Welch auto/cross-power, coherency, coherence, cross-phase, and
-lag-domain covariance, with synchronized graphical/numerical interval selection.
-Process a representative point or all locations in the background, then inspect
-cached spectra and spatial fields. Separate phase and frequency animations
-support scalar projections and coherent vector components.
+Assign one or two channels with the existing component selectors, set unused
+components to **None**, and open **Spectral Analysis…**. The tool uses the
+currently processed dataset and preserves spatial geometry, cases, and stored
+shots. It provides Welch auto/cross-power, coherency, coherence, cross-phase,
+lag-domain covariance, and scalar/vector animations.
 
-See [the spectral workflow and numerical conventions](docs/spectral.md) for
-normalization, phase signs, shot averaging, amplitude interpretation, and controls.
+See [Spectral Analysis](docs/spectral.md) for the complete workflow,
+normalization, sign conventions, shot averaging, and amplitude interpretation.
 
 ### Langmuir probe analysis
 
-Import both digitizer channels in volts, then select **Langmuir…** in the top
-bar. Analysis uses the original imported channels, independent of the main
-browser's integration, smoothing or shot averaging. The initial representative
-position, case and repeat come from the browser's current selection (including
-nearest-point spatial clicks). Every non-time index is also editable in the
-Langmuir dialog; the recorded global shot number is displayed when available.
+Import sweep-voltage and sweep-current digitizer channels in volts, then select
+**Langmuir…**. This analysis uses the original imported channels independently
+of main-browser integration, smoothing, or shot averaging.
 
-1. Assign `V_sweep` and `I_sweep`. Attenuation entries are **multipliers**:
-   `V_probe = V_digitizer × V_attenuation`. Current is
+1. Assign `V_sweep` and `I_sweep`. Voltage attenuation is a multiplier:
+   `V_probe = V_digitizer × V_attenuation`. Current is calculated as
    `(I_digitizer − offset_volts) × I_attenuation / resistance_ohms`, with optional
-   sign inversion so electron current is positive. Enter collection area in mm².
-   The adapter passes current in **A**, voltage in **V**, and area in **m²** to
-   `langmuir_analysis_core.analyze_iv_trace`; the core calculates density itself.
-2. Use **Configure current offset…** to select a zero-current interval in a
-   separate window or enter a known constant in **digitizer volts**. The recorded
-   interval's mean is subtracted independently for every trace. With no correction,
-   explicitly confirm that current zero was independently calibrated. The ion
-   saturation branch is not a zero-current reference.
-3. Drag horizontally on either representative trace to select a rising sweep.
-   Both plots share the highlighted interval. Start/end times in ms and inclusive,
-   zero-based sample indices are synchronized to recorded samples. Toolbar zoom
-   and pan update those bounds, and editing the bounds updates both plots. Home,
-   Back and Forward also update the analyzed interval. Limits snap to recorded
-   samples and stay within the recording. This works in the offset dialog too.
-   Select an interval containing enough of the ion,
-   retarding and electron branches for the core to fit; exclude the rapid return.
-4. Adjust voltage binning, Vp smoothing, electron-saturation method, temperature
-   range, fit R², fit margins/current floor, minimum fit points and ion SNR as
-   needed. Ideal-model checks are optional and disabled by default, matching the
-   supplied core.
-5. **Process This Shot** displays Te (eV), ne (m⁻³), Vp (V), Vf (V), and any
-   model notes. **Process All Shots** processes all locations, cases and repeats
-   in a background worker. Rejected fits become NaN; the summary shows the failure
-   count and first 20 reasons (all failures remain in the in-memory result).
-   Processing can be canceled without replacing previous completed results.
-6. The derived-quantity selector switches among cached results without refitting.
-   Plane data use color maps and spatial slices, line scans use spatial curves,
-   and point acquisitions show estimates by stored shot coordinate. Clicking a
-   result map/line selects the nearest representative location. Results are one
-   estimate per sweep interval, not a time-resolved series.
+   sign inversion. Enter collection area in mm².
+2. Use **Configure current offset…** to select a zero-current interval or enter a
+   known digitizer-voltage offset. Without correction, explicitly confirm that
+   current zero was independently calibrated.
+3. Select a rising sweep containing enough ion, retarding, and electron branches
+   for fitting; exclude the rapid return. Graphical and numeric interval controls
+   stay synchronized to recorded samples.
+4. Adjust binning, smoothing, fit method, fit quality, and physical-range settings
+   as needed.
+5. Use **Process This Shot** for a representative result or **Process All Shots**
+   for every location/case/repeat. Rejected fits become NaN and are summarized.
 
-**Reset View** restores the full recorded time range in both the plots and the
-analysis interval, retaining calibration, offset and fitting settings.
-**Exit to Main** retains the dialog,
-settings and computed results for reopening in the same session. Changing analysis
-settings invalidates cached results; loading a different dataset discards the old
-results and adapts the interval/index controls to the new recording. Settings are
-session-local, not saved across application restarts. The original HDF5 data and
-main-browser processing remain unchanged. The numerical physics implementation
-in `langmuir_analysis_core.py` is used unchanged.
+Results include Te, ne, plasma potential, and floating potential. Settings are
+session-local. Leaving the dialog preserves its state for the current dataset;
+loading another dataset discards it. Main-browser data and the original HDF5 file
+remain unchanged.
+
+## Export behavior
+
+- **Save image…** captures the complete current visualization, including linked
+  slices and time trace.
+- **Export MP4…** renders the inclusive first/last frame range at the selected
+  stride and FPS. A canceled or failed export does not replace an existing file.
+- **Save data…** writes every currently processed channel, case, spatial point,
+  and time sample. It does not crop to the cursor or movie frame range. The
+  portable HDF5 result can be reopened directly in LAPD Explorer.
+- **Run info** displays acquisition details, dimensions, units, metadata, and
+  processing history.
+
+## Updating or reinstalling
+
+For a Git clone, pull changes and refresh dependencies with:
+
+```sh
+git pull
+.venv/bin/python -m pip install -e .
+```
+
+On Windows, replace `.venv/bin/python` with
+`.\.venv\Scripts\python.exe`. If an installation becomes inconsistent, delete
+only the repository's `.venv` directory, recreate it with the platform-specific
+commands above, and reinstall.
+
+## Troubleshooting
+
+### `python3`, `py`, or Python 3.11+ is not found
+
+Install a current 64-bit Python, close and reopen the terminal, then recheck the
+version. Do not use `sudo pip`; keep the installation inside `.venv`.
+
+### `lapd-explorer` is not recognized
+
+Use the full `python -m lapd_explorer` launch command shown above. It does not
+depend on the environment's script directory being on `PATH`.
+
+### PowerShell refuses to run `Activate.ps1`
+
+Activation is optional. Use `.\.venv\Scripts\python.exe` directly; no execution
+policy change is needed.
+
+### Qt reports that a Linux platform plugin cannot be initialized
+
+Launch from a graphical desktop, not a text-only SSH session. A minimal Linux
+installation may also need its distribution's XCB/EGL runtime libraries. On
+Debian/Ubuntu, the commonly missing packages are `libxcb-cursor0`,
+`libxkbcommon-x11-0`, and `libegl1`; package names differ on other distributions.
+
+### Dependency installation tries to compile a large package
+
+Confirm that the environment uses a supported 64-bit CPython and that `pip` is
+current. Current Python versions normally receive binary wheels for PySide6,
+NumPy, SciPy, Matplotlib, Astropy, and h5py.
+
+### A file opens as Raw HDF5 instead of BaPSF data
+
+The file may not contain the LAPD metadata expected by `bapsflib`. Select numeric
+datasets and use manual mapping, or verify that the intended acquisition file was
+chosen.
+
+## Development
+
+See [Development and validation](docs/development.md) for test installation,
+headless commands on every platform, real-sample verification, screenshot
+regeneration, and the code map.
+
+API behavior has been checked against `bapsflib` 2026.4.0 and its
+[official LAPD documentation](https://bapsflib.readthedocs.io/en/latest/using_lapd/main.html).
+
+## Current scope
+
+Irregular point clouds and volume scans are not supported. Raw import assumes a
+final time axis. Calibration, arbitrary per-shot parameter tables, per-channel
+time-offset correction, and out-of-core processing remain extension points.

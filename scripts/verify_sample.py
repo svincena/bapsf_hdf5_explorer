@@ -1,6 +1,6 @@
 """Exercise the full Qt import and plotting workflow on the supplied x-line file.
 
-Run from the project root:
+Run from the project root. See docs/development.md for Windows instructions:
   QT_QPA_PLATFORM=offscreen .venv/bin/python scripts/verify_sample.py /path/to/file.hdf5
 """
 import sys
@@ -35,8 +35,10 @@ while dialog.dataset is None and time.monotonic() < deadline:
     time.sleep(.01)
 assert dialog.dataset is not None
 assert dialog.dataset.shape == (91,5,6144)
+dialog.dataset.source = Path(path).name
 w = MainWindow()
 w.set_data(dialog.dataset)
+w.appearance.setCurrentText("Light")
 w.average.setChecked(True)
 w.baseline.setCurrentText('Remove mean')
 w.processed(preprocess(w.raw, average=True, baseline='Remove mean'))
