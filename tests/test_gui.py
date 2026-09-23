@@ -3,10 +3,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/lapd-matplotlib")
 import numpy as np
 import pytest
-from PySide6 import QtWidgets as W
+from PySide6 import QtGui as G, QtWidgets as W
 from lapd_explorer.app import MainWindow, STYLE, export_mp4, atomic_save
 from lapd_explorer.model import Dataset
-from lapd_explorer.widgets import ImportDialog
+from lapd_explorer.widgets import ImportDialog, ScientificDoubleSpinBox
 
 
 @pytest.fixture(scope="module")
@@ -73,6 +73,19 @@ def test_atomic_save_preserves_existing_destination_on_failure(tmp_path):
         atomic_save(path, fail)
     assert path.read_bytes() == b"original"
     assert not list(tmp_path.glob(".lapd-*"))
+
+
+def test_scientific_double_spin_box_accepts_exponents(app):
+    box = ScientificDoubleSpinBox()
+    box.setDecimals(9)
+    box.setRange(-1e12, 1e12)
+    acceptable, _, _ = box.validate("1.4e5", 5)
+    intermediate, _, _ = box.validate("1.4e", 4)
+    assert acceptable == G.QValidator.Acceptable
+    assert intermediate == G.QValidator.Intermediate
+    box.lineEdit().setText("1.4e5")
+    box.interpretText()
+    assert box.value() == 1.4e5
 
 
 def test_import_dialog_applies_shot_guess_and_keeps_fields_editable(app, monkeypatch):

@@ -150,6 +150,9 @@ requirement.
    move the linked spatial cursor.
 7. Use **Save image…**, **Export MP4…**, or **Save data…** for output.
 
+Real-valued fields accept ordinary decimals or scientific notation such as
+`1.4e5`. Discrete indices, sample counts, and axis sizes remain integer-only.
+
 Processing always starts from the imported original, so applying integration or
 gain twice does not apply the operation twice. **Reset processing** returns to
 the imported values. Changing Light/Dark appearance preserves the data,
