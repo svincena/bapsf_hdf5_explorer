@@ -75,6 +75,107 @@ def test_atomic_save_preserves_existing_destination_on_failure(tmp_path):
     assert not list(tmp_path.glob(".lapd-*"))
 
 
+def test_file_dialog_locations_are_independent_and_persist(app, monkeypatch, tmp_path):
+    from pathlib import Path
+    from PySide6 import QtCore as C
+    from lapd_explorer.widgets import Worker
+    settings_path = str(tmp_path / "preferences.ini")
+    settings = C.QSettings(settings_path, C.QSettings.IniFormat)
+    w = MainWindow(settings=settings)
+    data = Dataset({"A": np.arange(8.)}, ("time",), {"time": np.arange(8.)})
+    w.set_data(data)
+    operations = [("open_data", w.open_file, ""),
+                  ("save_data", w.save_data, "lapd-processed.h5"),
+                  ("save_image", w.save_image, "lapd-frame.png"),
+                  ("save_movie", w.export_movie, "lapd-animation.mp4")]
+    selected = ""
+    shown = []
+    def choose(parent, title, initial, filters):
+        shown.append(initial)
+        return selected, ""
+    monkeypatch.setattr(W.QFileDialog, "getOpenFileName", choose)
+    monkeypatch.setattr(W.QFileDialog, "getSaveFileName", choose)
+    # Canceling a dialog must not set preferences or inherit another category.
+    for category, operation, filename in operations:
+        operation()
+        assert shown[-1] == str(Path.home() / filename)
+        assert not settings.contains(f"file_dialogs/{category}")
+
+    def launch(fn, done, message):
+        w.jobs.append(Worker(fn, w))  # Movie dialog connects to the job's signals.
+        done(fn())
+    monkeypatch.setattr(w, "launch", launch)
+    monkeypatch.setattr("lapd_explorer.app.io.inspect_file", lambda path: {"portable": True})
+    monkeypatch.setattr("lapd_explorer.app.io.load_dataset", lambda path: data)
+    monkeypatch.setattr(w, "draw", lambda: None)
+    monkeypatch.setattr(w.fig, "savefig", lambda path, **kwargs: Path(path).write_bytes(b"image"))
+    monkeypatch.setattr("lapd_explorer.app.export_mp4", lambda path, *args: Path(path).write_bytes(b"movie"))
+    for category, operation, filename in operations:
+        directory = tmp_path / category
+        directory.mkdir()
+        selected = str(directory / (filename or "input.h5"))
+        operation()
+        assert settings.value(f"file_dialogs/{category}") == str(directory)
+        assert w.file_dialog_path(category, filename) == str(directory / filename)
+    w.redraw_timer.stop()
+    w.close()
+
+    # A new settings object/window simulates restarting the application.
+    restored = MainWindow(settings=C.QSettings(settings_path, C.QSettings.IniFormat))
+    for category, _, filename in operations:
+        assert restored.file_dialog_path(category, filename) == str(tmp_path / category / filename)
+    restored.settings.setValue("file_dialogs/save_image", str(tmp_path / "deleted-directory"))
+    assert restored.file_dialog_path("save_image", "lapd-frame.png") == str(Path.home() / "lapd-frame.png")
+    assert restored.file_dialog_path("save_data") == str(tmp_path / "save_data")
+    restored.redraw_timer.stop()
+    restored.close()
+
+
+def test_failed_io_and_canceled_import_preserve_locations(app, monkeypatch, tmp_path):
+    from PySide6 import QtCore as C
+    settings = C.QSettings(str(tmp_path / "preferences.ini"), C.QSettings.IniFormat)
+    w = MainWindow(settings=settings)
+    previous = tmp_path / "previous"
+    previous.mkdir()
+    for category in ("open_data", "save_data", "save_image", "save_movie"):
+        w.remember_file_location(category, previous / "old.h5")
+    selected = str(tmp_path / "new.h5")
+    monkeypatch.setattr(W.QFileDialog, "getOpenFileName", lambda *args: (selected, ""))
+    monkeypatch.setattr(W.QFileDialog, "getSaveFileName", lambda *args: (selected, ""))
+    errors = []
+    monkeypatch.setattr(w, "error", errors.append)
+    def fail(*args, **kwargs):
+        raise OSError("Test I/O failure")
+    def launch(fn, done, message):
+        from lapd_explorer.widgets import Worker
+        w.jobs.append(Worker(fn, w))
+        try:
+            result = fn()
+        except OSError as exc:
+            errors.append(str(exc))
+        else:
+            done(result)
+    monkeypatch.setattr(w, "launch", launch)
+    monkeypatch.setattr("lapd_explorer.app.io.inspect_file", fail)
+    monkeypatch.setattr("lapd_explorer.app.io.save_dataset", fail)
+    monkeypatch.setattr(w, "draw", lambda: None)
+    monkeypatch.setattr(w.fig, "savefig", fail)
+    monkeypatch.setattr("lapd_explorer.app.export_mp4", fail)
+    for operation in (w.open_file, w.save_data, w.save_image, w.export_movie):
+        operation()
+    assert len(errors) == 4
+    monkeypatch.setattr("lapd_explorer.app.io.inspect_file", lambda path: {"portable": False})
+    class CanceledImport:
+        def __init__(self, *args):
+            pass
+        def exec(self):
+            return W.QDialog.Rejected
+    monkeypatch.setattr("lapd_explorer.app.ImportDialog", CanceledImport)
+    w.open_file()
+    for category in ("open_data", "save_data", "save_image", "save_movie"):
+        assert w.file_dialog_path(category) == str(previous)
+    w.redraw_timer.stop()
+    w.close()
 def test_scientific_double_spin_box_accepts_exponents(app):
     box = ScientificDoubleSpinBox()
     box.setDecimals(9)
@@ -164,6 +265,90 @@ def test_smoothing_dialog_and_processing(app, monkeypatch, tmp_path):
     w.smooth.setChecked(True)
     w.set_data(data)
     assert not w.smooth.isChecked()
+    w.close()
+
+
+def test_spatial_averaging_dialog_processing_render_and_reset(app, monkeypatch, tmp_path):
+    from lapd_explorer.widgets import SpatialAveragingDialog
+    from lapd_explorer.spatial import DEFAULT_SPATIAL_AVERAGING, average_spatial
+    from lapd_explorer import plotting
+    dialog = SpatialAveragingDialog(DEFAULT_SPATIAL_AVERAGING, ("z", "x"))
+    dialog.show()
+    app.processEvents()
+    assert dialog.windows[0].isVisible() and dialog.sigmas[0].isHidden()
+    assert "z window" in dialog.form.labelForField(dialog.windows[0]).text()
+    dialog.windows[0].setValue(4)
+    dialog.accept()
+    assert "odd" in dialog.error_label.text()
+    dialog.method.setCurrentText("Gaussian average")
+    assert dialog.windows[0].isHidden() and dialog.sigmas[0].isVisible()
+    dialog.sigmas[0].setText("nan")
+    dialog.accept()
+    assert "positive" in dialog.error_label.text()
+    dialog.sigmas[0].setText(".8")
+    dialog.sigmas[1].setText("1.5")
+    assert dialog.settings()["sigma"] == (.8, 1.5)
+    dialog.method.setCurrentText("Disk average")
+    assert dialog.radius.isVisible() and dialog.sigmas[0].isHidden()
+    dialog.radius.setValue(2)
+    dialog.accept()
+    assert dialog.result() == W.QDialog.Accepted
+    restored = SpatialAveragingDialog(dialog.settings(), ("z", "x"))
+    assert restored.settings() == dialog.settings()
+    restored.reject()
+
+    w = MainWindow()
+    a = np.arange(5*7*4., dtype=float).reshape(5, 7, 4)**2
+    data = Dataset({"A": a, "B": a*2}, ("z", "x", "time"),
+                   {"z": np.arange(5), "x": np.arange(7), "time": np.arange(4)})
+    w.set_data(data)
+    assert w.spatial_average.isEnabled() and not w.spatial_average.isChecked()
+    assert not w.spatial_button.isEnabled()
+    w.spatial_average.setChecked(True)
+    assert w.spatial_button.isEnabled()
+    w.spatial_settings.update(dialog.settings())
+    monkeypatch.setattr(w, "launch", lambda fn, done, message: done(fn()))
+    w.apply_processing()
+    expected = average_spatial(a, **dialog.settings())
+    np.testing.assert_allclose(w.data.channels["A"], expected)
+    w.apply_processing()
+    np.testing.assert_allclose(w.data.channels["A"], expected)
+    assert "Spatial averaging: disk" in w.history.text()
+    w.mode.setCurrentText("Vector")
+    w.show()
+    w.draw()
+    app.processEvents()
+    np.testing.assert_allclose(w._values, expected*np.sqrt(5))
+    for frame in (0, 3):
+        w.frame.setValue(frame)
+        w.draw()
+        np.testing.assert_allclose(w.main_ax.collections[0].get_array(), expected[..., frame]*np.sqrt(5))
+        np.testing.assert_allclose(w.main_ax.collections[1].U, expected[..., frame].ravel())
+        horizontal, vertical = w.fig._lapd_slice_axes
+        np.testing.assert_allclose(horizontal.lines[0].get_ydata(), w._values[w.slice_boxes[0].value(), :, frame])
+        np.testing.assert_allclose(vertical.lines[0].get_ydata(), w._values[:, w.slice_boxes[1].value(), frame])
+    # The standalone export renderer receives the same processed channels.
+    fig = plotting.figure()
+    ax = plotting.render(fig, w.data, w.options())
+    fig._lapd_update_frame(1)
+    np.testing.assert_allclose(ax.collections[0].get_array(), expected[..., 1]*np.sqrt(5))
+    np.testing.assert_allclose(ax.collections[1].U, expected[..., 1].ravel())
+    fig.clear()
+    w.grab().save(str(tmp_path / "spatial-window.png"))
+    preview = SpatialAveragingDialog(w.spatial_settings, data.spatial_dims, w)
+    preview.show()
+    app.processEvents()
+    preview.grab().save(str(tmp_path / "spatial-dialog.png"))
+    preview.reject()
+    w.reset_processing()
+    assert w.data is w.raw and not w.spatial_average.isChecked()
+    assert w.spatial_settings == DEFAULT_SPATIAL_AVERAGING
+    for dims, shape in [(("x", "time"), (3, 4)), (("time",), (4,))]:
+        w.spatial_average.setChecked(True)
+        w.set_data(Dataset({"A": np.ones(shape)}, dims,
+                           {d: np.arange(n) for d, n in zip(dims, shape)}))
+        assert not w.spatial_average.isEnabled() and not w.spatial_average.isChecked()
+        assert not w.spatial_button.isEnabled()
     w.close()
 
 

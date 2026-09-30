@@ -4,6 +4,7 @@ import numpy as np
 from scipy.integrate import cumulative_trapezoid
 from scipy.signal import welch
 from .smoothing import smooth_time_series
+from .spatial import average_spatial, DEFAULT_SPATIAL_AVERAGING
 
 
 @dataclass
@@ -59,14 +60,18 @@ class Dataset:
         return self.channels[name][key]
 
 
-def preprocess(data, *, average=False, baseline="None", integrate=False, gain=1.0, smoothing=None):
-    """Apply per-trace baseline → integration → smoothing → gain → repeat averaging.
+def preprocess(data, *, average=False, baseline="None", integrate=False, gain=1.0,
+               smoothing=None, spatial_averaging=None):
+    """Apply baseline → integration → time smoothing → gain → shots → spatial filtering.
 
-    Averaging never combines case or position axes. No inferred error bars are
-    produced when only one stored trace is available.
+    Shot averaging never combines cases or positions. Spatial filtering combines
+    neighboring positions separately for each channel, case, shot, and time.
     """
     if not np.isfinite(gain):
         raise ValueError("Gain must be finite.")
+    if spatial_averaging is not None and len(data.spatial_dims) != 2:
+        raise ValueError("Spatial averaging requires a 2D data plane.")
+    output_dims = tuple(d for d in data.dims if not (average and d == "shot"))
     out = {}
     steps = []
     t = data.coords["time"]
@@ -91,6 +96,9 @@ def preprocess(data, *, average=False, baseline="None", integrate=False, gain=1.
         a *= gain
         if average and "shot" in data.dims:
             a = np.mean(a, axis=data.dims.index("shot"))
+        if spatial_averaging is not None:
+            a = average_spatial(a, spatial_axes=tuple(output_dims.index(d) for d in data.spatial_dims),
+                                **spatial_averaging)
         out[name] = a
     if baseline != "None":
         steps.append(baseline)
@@ -117,6 +125,13 @@ def preprocess(data, *, average=False, baseline="None", integrate=False, gain=1.
         dims = tuple(d for d in dims if d != "shot")
         coords.pop("shot")
         shots = None
+    if spatial_averaging is not None:
+        settings = DEFAULT_SPATIAL_AVERAGING | spatial_averaging
+        parameter = {"box": "window_size", "median": "window_size",
+                     "gaussian": "sigma", "disk": "radius"}[settings["method"]]
+        details = ", ".join(f"{k}={settings[k]}" for k in (parameter, "mode", "nan_policy"))
+        steps.append(f"Spatial averaging: {settings['method']} ({details}; "
+                     f"grid points along {', '.join(data.spatial_dims)})")
     return replace(data, channels=out, dims=dims, coords=coords,
                    units=f"{data.units}·s" if integrate else data.units,
                    shot_numbers=shots, history=data.history + tuple(steps))
