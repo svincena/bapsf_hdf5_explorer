@@ -259,7 +259,7 @@ basis.
 Operations run in this order:
 
 ```text
-baseline → integration → time smoothing → gain → stored-shot average
+baseline → integration → time smoothing → gain → stored-shot average → spatial averaging
 ```
 
 - Mean removal and linear detrending are applied independently to each trace.
@@ -285,6 +285,36 @@ sample-index space on irregular grids. Butterworth sampling frequency is inferre
 from uniformly spaced time coordinates. Missing values may propagate or be
 interpolated along time; entirely missing traces remain NaN. All selected filter
 settings are written to exported processing history.
+
+### Spatial averaging (2D planes)
+
+Enable **Spatial averaging (2D)** in **Preprocessing**, open its **Settings…**,
+then click **Apply to original data**. Choose from:
+
+- **Box average**: equal weights in a rectangular neighborhood, with independent
+  odd window sizes along each spatial axis.
+- **Gaussian average**: distance-weighted smoothing, with independent sigma
+  values along each axis and support extending approximately four sigma.
+- **Disk average**: equal weights inside a circular neighborhood in grid-index
+  space, controlled by its radius.
+- **Median filter**: a robust neighborhood median for suppressing isolated
+  spikes, with independent odd window sizes. This is not an arithmetic mean.
+
+Sizes are in grid points, not centimeters. Unequal axis spacing makes a disk
+elliptical in physical space; on irregular grids physical smoothing widths vary.
+Edges can be reflected (default), extended using the nearest edge, or wrapped
+periodically. **Propagate missing values** (default) marks neighborhoods containing
+NaN or infinity as missing. **Omit missing neighbors** uses finite neighbors only,
+renormalizes averaging weights, and can fill gaps; empty neighborhoods stay NaN.
+
+Filtering runs independently for every channel, time, case, and remaining shot,
+after shot averaging and before absolute values or vector magnitudes. It preserves
+grid coordinates and array shape. Maps, vector arrows, linked slices, cursor
+traces, saved images, movies, and exported data all use the processed channels.
+Settings and axis order are recorded in exported processing history. The controls
+are disabled for point and line data; filtering is off by default. **Reset
+processing** restores the loaded data, and repeated Apply operations always start
+from those originals.
 
 ### Plots and playback
 

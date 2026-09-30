@@ -340,6 +340,87 @@ class SliceAxisControls(W.QGroupBox):
         self.show_limits((-1., 1.))
 
 
+class SpatialAveragingDialog(W.QDialog):
+    """Configure spatial neighborhoods in the displayed plane's axis order."""
+    METHODS = {"Box average": "box", "Gaussian average": "gaussian",
+               "Disk average": "disk", "Median filter": "median"}
+    MODES = {"Reflect edges": "reflect", "Extend nearest edge": "nearest", "Periodic wrap": "wrap"}
+    MISSING = {"Propagate missing values": "propagate", "Omit missing neighbors": "omit"}
+
+    def __init__(self, settings, spatial_dims, parent=None):
+        super().__init__(parent)
+        from .spatial import DEFAULT_SPATIAL_AVERAGING
+        settings = DEFAULT_SPATIAL_AVERAGING | settings
+        self.setWindowTitle("Spatial averaging settings")
+        self.setMinimumWidth(480)
+        layout = W.QVBoxLayout(self)
+        note = W.QLabel("Applied to each channel's 2D plane after other preprocessing, separately at every time, case and remaining shot. Sizes are grid points, not physical distances; on irregular grids the physical width varies.")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        self.form = W.QFormLayout()
+        layout.addLayout(self.form)
+        self.method = combo(list(self.METHODS))
+        self.method.setCurrentIndex(list(self.METHODS.values()).index(settings["method"]))
+        self.form.addRow("Method", self.method)
+        self.windows = [spin(1, 101, v) for v in settings["window_size"]]
+        self.sigmas = [W.QLineEdit(str(v)) for v in settings["sigma"]]
+        for dim, window, sigma in zip(spatial_dims, self.windows, self.sigmas):
+            window.setSingleStep(2)
+            self.form.addRow(f"{dim} window (odd grid points)", window)
+            self.form.addRow(f"{dim} Gaussian σ (grid points)", sigma)
+        self.radius = spin(1, 50, settings["radius"])
+        self.form.addRow("Disk radius (grid points)", self.radius)
+        self.boundary = combo(list(self.MODES))
+        self.boundary.setCurrentIndex(list(self.MODES.values()).index(settings["mode"]))
+        self.form.addRow("Boundary", self.boundary)
+        self.missing = combo(list(self.MISSING))
+        self.missing.setCurrentIndex(list(self.MISSING.values()).index(settings["nan_policy"]))
+        self.form.addRow("Missing values", self.missing)
+        hint = W.QLabel("Box and disk averages weight neighbors equally. Gaussian weights decrease with distance (support ±4σ). Median rejects isolated spikes. Propagate marks any neighborhood containing missing data as missing; omit uses finite neighbors and can fill gaps. Empty neighborhoods remain missing. Changes take effect with Apply to original data.")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        self.error_label = W.QLabel()
+        self.error_label.setWordWrap(True)
+        layout.addWidget(self.error_label)
+        buttons = W.QDialogButtonBox(W.QDialogButtonBox.Ok | W.QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.method.currentIndexChanged.connect(self.update_fields)
+        self.update_fields()
+
+    def update_fields(self):
+        method = self.METHODS[self.method.currentText()]
+        for widget in self.windows:
+            self.form.setRowVisible(widget, method in {"box", "median"})
+        for widget in self.sigmas:
+            self.form.setRowVisible(widget, method == "gaussian")
+        self.form.setRowVisible(self.radius, method == "disk")
+        self.error_label.clear()
+
+    def settings(self):
+        method = self.METHODS[self.method.currentText()]
+        result = dict(method=method, mode=self.MODES[self.boundary.currentText()],
+                      nan_policy=self.MISSING[self.missing.currentText()])
+        if method in {"box", "median"}:
+            result["window_size"] = tuple(w.value() for w in self.windows)
+        elif method == "gaussian":
+            result["sigma"] = tuple(float(w.text()) for w in self.sigmas)
+        else:
+            result["radius"] = self.radius.value()
+        return result
+
+    def accept(self):
+        import numpy as np
+        from .spatial import average_spatial
+        try:
+            average_spatial(np.zeros((1, 1)), **self.settings())
+        except (ValueError, TypeError, OverflowError) as exc:
+            self.error_label.setText(str(exc))
+            return
+        super().accept()
+
+
 class SmoothingDialog(W.QDialog):
     """Show only the controls relevant to the selected time filter."""
     METHODS = {"Moving average": "moving", "Savitzky–Golay": "savgol",

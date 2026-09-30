@@ -154,6 +154,90 @@ def test_smoothing_dialog_and_processing(app, monkeypatch, tmp_path):
     w.close()
 
 
+def test_spatial_averaging_dialog_processing_render_and_reset(app, monkeypatch, tmp_path):
+    from lapd_explorer.widgets import SpatialAveragingDialog
+    from lapd_explorer.spatial import DEFAULT_SPATIAL_AVERAGING, average_spatial
+    from lapd_explorer import plotting
+    dialog = SpatialAveragingDialog(DEFAULT_SPATIAL_AVERAGING, ("z", "x"))
+    dialog.show()
+    app.processEvents()
+    assert dialog.windows[0].isVisible() and dialog.sigmas[0].isHidden()
+    assert "z window" in dialog.form.labelForField(dialog.windows[0]).text()
+    dialog.windows[0].setValue(4)
+    dialog.accept()
+    assert "odd" in dialog.error_label.text()
+    dialog.method.setCurrentText("Gaussian average")
+    assert dialog.windows[0].isHidden() and dialog.sigmas[0].isVisible()
+    dialog.sigmas[0].setText("nan")
+    dialog.accept()
+    assert "positive" in dialog.error_label.text()
+    dialog.sigmas[0].setText(".8")
+    dialog.sigmas[1].setText("1.5")
+    assert dialog.settings()["sigma"] == (.8, 1.5)
+    dialog.method.setCurrentText("Disk average")
+    assert dialog.radius.isVisible() and dialog.sigmas[0].isHidden()
+    dialog.radius.setValue(2)
+    dialog.accept()
+    assert dialog.result() == W.QDialog.Accepted
+    restored = SpatialAveragingDialog(dialog.settings(), ("z", "x"))
+    assert restored.settings() == dialog.settings()
+    restored.reject()
+
+    w = MainWindow()
+    a = np.arange(5*7*4., dtype=float).reshape(5, 7, 4)**2
+    data = Dataset({"A": a, "B": a*2}, ("z", "x", "time"),
+                   {"z": np.arange(5), "x": np.arange(7), "time": np.arange(4)})
+    w.set_data(data)
+    assert w.spatial_average.isEnabled() and not w.spatial_average.isChecked()
+    assert not w.spatial_button.isEnabled()
+    w.spatial_average.setChecked(True)
+    assert w.spatial_button.isEnabled()
+    w.spatial_settings.update(dialog.settings())
+    monkeypatch.setattr(w, "launch", lambda fn, done, message: done(fn()))
+    w.apply_processing()
+    expected = average_spatial(a, **dialog.settings())
+    np.testing.assert_allclose(w.data.channels["A"], expected)
+    w.apply_processing()
+    np.testing.assert_allclose(w.data.channels["A"], expected)
+    assert "Spatial averaging: disk" in w.history.text()
+    w.mode.setCurrentText("Vector")
+    w.show()
+    w.draw()
+    app.processEvents()
+    np.testing.assert_allclose(w._values, expected*np.sqrt(5))
+    for frame in (0, 3):
+        w.frame.setValue(frame)
+        w.draw()
+        np.testing.assert_allclose(w.main_ax.collections[0].get_array(), expected[..., frame]*np.sqrt(5))
+        np.testing.assert_allclose(w.main_ax.collections[1].U, expected[..., frame].ravel())
+        horizontal, vertical = w.fig._lapd_slice_axes
+        np.testing.assert_allclose(horizontal.lines[0].get_ydata(), w._values[w.slice_boxes[0].value(), :, frame])
+        np.testing.assert_allclose(vertical.lines[0].get_ydata(), w._values[:, w.slice_boxes[1].value(), frame])
+    # The standalone export renderer receives the same processed channels.
+    fig = plotting.figure()
+    ax = plotting.render(fig, w.data, w.options())
+    fig._lapd_update_frame(1)
+    np.testing.assert_allclose(ax.collections[0].get_array(), expected[..., 1]*np.sqrt(5))
+    np.testing.assert_allclose(ax.collections[1].U, expected[..., 1].ravel())
+    fig.clear()
+    w.grab().save(str(tmp_path / "spatial-window.png"))
+    preview = SpatialAveragingDialog(w.spatial_settings, data.spatial_dims, w)
+    preview.show()
+    app.processEvents()
+    preview.grab().save(str(tmp_path / "spatial-dialog.png"))
+    preview.reject()
+    w.reset_processing()
+    assert w.data is w.raw and not w.spatial_average.isChecked()
+    assert w.spatial_settings == DEFAULT_SPATIAL_AVERAGING
+    for dims, shape in [(("x", "time"), (3, 4)), (("time",), (4,))]:
+        w.spatial_average.setChecked(True)
+        w.set_data(Dataset({"A": np.ones(shape)}, dims,
+                           {d: np.arange(n) for d, n in zip(dims, shape)}))
+        assert not w.spatial_average.isEnabled() and not w.spatial_average.isChecked()
+        assert not w.spatial_button.isEnabled()
+    w.close()
+
+
 def test_butterworth_type_controls_and_settings(app, monkeypatch):
     from lapd_explorer.widgets import SmoothingDialog
     from lapd_explorer.smoothing import DEFAULT_SMOOTHING

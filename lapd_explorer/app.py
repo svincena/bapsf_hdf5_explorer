@@ -10,8 +10,10 @@ from PySide6 import QtCore as C, QtGui as G, QtWidgets as W
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from .model import demo, preprocess, quantity
 from . import io, plotting
-from .widgets import Worker, ImportDialog, SmoothingDialog, SliceAxisControls, combo, spin
+from .widgets import (Worker, ImportDialog, SmoothingDialog, SpatialAveragingDialog,
+                      SliceAxisControls, combo, spin)
 from .smoothing import DEFAULT_SMOOTHING
+from .spatial import DEFAULT_SPATIAL_AVERAGING
 from .appearance import FacilityLogo, apply_appearance, colors, stylesheet
 
 # Kept for scripts that import the application's default stylesheet.
@@ -126,6 +128,17 @@ class MainWindow(W.QMainWindow):
         smooth_row.addWidget(self.smooth_button)
         pf.addRow(smooth_row)
         pf.addRow("Gain", self.gain)
+        self.spatial_settings = dict(DEFAULT_SPATIAL_AVERAGING)
+        self.spatial_average = W.QCheckBox("Spatial averaging (2D)")
+        self.spatial_average.setToolTip("Average neighboring positions independently at each time, after other preprocessing. Available for planes only.")
+        self.spatial_button = W.QPushButton("Settings…")
+        self.spatial_button.setEnabled(False)
+        self.spatial_average.toggled.connect(self.spatial_button.setEnabled)
+        self.spatial_button.clicked.connect(self.configure_spatial_averaging)
+        spatial_row = W.QHBoxLayout()
+        spatial_row.addWidget(self.spatial_average)
+        spatial_row.addWidget(self.spatial_button)
+        pf.addRow(spatial_row)
         apply = W.QPushButton("Apply to original data")
         apply.setObjectName("primary")
         apply.clicked.connect(self.apply_processing)
@@ -299,6 +312,7 @@ class MainWindow(W.QMainWindow):
         self.smooth.setChecked(False)
         self.smoothing_settings = dict(DEFAULT_SMOOTHING)
         self.smooth_button.setToolTip("")
+        self.reset_spatial_averaging()
         self.gain.setText("1")
         self.mode.blockSignals(True)
         self.mode.setCurrentIndex(0)
@@ -323,6 +337,8 @@ class MainWindow(W.QMainWindow):
     def refresh_dimensions(self):
         data = self.data
         plane = len(data.spatial_dims) == 2
+        self.spatial_average.setEnabled(plane)
+        self.spatial_button.setEnabled(plane and self.spatial_average.isChecked())
         self.slice_axis_panel.setVisible(plane)
         if plane:
             for control, dim in zip(self.slice_axis_controls, reversed(data.spatial_dims)):
@@ -408,7 +424,8 @@ class MainWindow(W.QMainWindow):
         try:
             settings = dict(average=self.average.isChecked(), baseline=self.baseline.currentText(),
                             integrate=self.integrate.isChecked(), gain=float(self.gain.text()),
-                            smoothing=dict(self.smoothing_settings) if self.smooth.isChecked() else None)
+                            smoothing=dict(self.smoothing_settings) if self.smooth.isChecked() else None,
+                            spatial_averaging=dict(self.spatial_settings) if self.spatial_average.isChecked() else None)
             self.launch(lambda: preprocess(self.raw, **settings), self.processed, "Processing traces…")
         except ValueError as exc:
             self.error(str(exc))
@@ -418,6 +435,17 @@ class MainWindow(W.QMainWindow):
         self.refresh_dimensions()
         self.invalidate()
 
+    def configure_spatial_averaging(self):
+        dialog = SpatialAveragingDialog(self.spatial_settings, self.raw.spatial_dims, self)
+        if dialog.exec() == W.QDialog.Accepted:
+            self.spatial_settings.update(dialog.settings())
+            self.spatial_button.setToolTip(str(dialog.settings()))
+
+    def reset_spatial_averaging(self):
+        self.spatial_average.setChecked(False)
+        self.spatial_settings = dict(DEFAULT_SPATIAL_AVERAGING)
+        self.spatial_button.setToolTip("")
+
     def reset_processing(self):
         self.average.setChecked(False)
         self.baseline.setCurrentIndex(0)
@@ -425,6 +453,7 @@ class MainWindow(W.QMainWindow):
         self.smooth.setChecked(False)
         self.smoothing_settings = dict(DEFAULT_SMOOTHING)
         self.smooth_button.setToolTip("")
+        self.reset_spatial_averaging()
         self.gain.setText("1")
         self.processed(self.raw)
 
