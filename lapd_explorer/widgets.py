@@ -1,5 +1,5 @@
-"""Qt workers and the acquisition import dialog."""
-from PySide6 import QtCore as C, QtWidgets as W
+"""Shared Qt controls, workers, and acquisition/import dialogs."""
+from PySide6 import QtCore as C, QtGui as G, QtWidgets as W
 from . import io
 from .appearance import FacilityLogo
 
@@ -30,6 +30,29 @@ def spin(minimum=0, maximum=999999, value=0):
     widget.setRange(minimum, maximum)
     widget.setValue(value)
     return widget
+
+
+class ScientificDoubleSpinBox(W.QDoubleSpinBox):
+    """A double spin box that accepts decimal and ``e`` exponent notation."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # Other numeric inputs use Python's locale-independent float parser, so
+        # keep the decimal point and exponent syntax consistent across the GUI.
+        self.setLocale(C.QLocale.c())
+        self.setToolTip("Decimal or scientific notation is accepted (for example, 1.4e5).")
+
+    def validate(self, text, position):
+        validator = G.QDoubleValidator(
+            self.minimum(), self.maximum(), self.decimals(), self
+        )
+        validator.setLocale(self.locale())
+        validator.setNotation(G.QDoubleValidator.ScientificNotation)
+        return validator.validate(text, position)
+
+    def valueFromText(self, text):
+        value, valid = self.locale().toDouble(text.strip())
+        return value if valid else self.value()
 
 
 class ImportDialog(W.QDialog):

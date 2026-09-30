@@ -155,6 +155,8 @@ saving images, and exporting movies, including across app restarts. A folder
 is remembered after a successful read or write; canceling or a failed operation
 keeps the previous location. If a remembered folder is unavailable, the dialog
 starts in your home folder.
+Real-valued fields accept ordinary decimals or scientific notation such as
+`1.4e5`. Discrete indices, sample counts, and axis sizes remain integer-only.
 
 Processing always starts from the imported original, so applying integration or
 gain twice does not apply the operation twice. **Reset processing** returns to

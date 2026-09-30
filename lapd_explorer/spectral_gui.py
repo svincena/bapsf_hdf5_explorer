@@ -7,11 +7,11 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolb
 from . import spectral as analysis, plotting
 from .appearance import FacilityLogo, colors
 from .langmuir_gui import IntervalEditor, TraceView
-from .widgets import Worker, combo, spin
+from .widgets import ScientificDoubleSpinBox, Worker, combo, spin
 
 
 def number(value=0., low=-1e15, high=1e15, decimals=6):
-    box = W.QDoubleSpinBox()
+    box = ScientificDoubleSpinBox()
     box.setDecimals(decimals)
     box.setRange(low, high)
     box.setValue(value)

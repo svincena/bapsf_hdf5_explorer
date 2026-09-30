@@ -7,7 +7,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolb
 from matplotlib.widgets import SpanSelector
 from . import langmuir as analysis, plotting
 from .appearance import FacilityLogo, colors
-from .widgets import Worker, combo, spin
+from .widgets import ScientificDoubleSpinBox, Worker, combo, spin
 
 
 class IntervalEditor(W.QWidget):
@@ -18,7 +18,7 @@ class IntervalEditor(W.QWidget):
         self.time = time
         layout = W.QFormLayout(self)
         layout.setRowWrapPolicy(W.QFormLayout.WrapLongRows)
-        self.start, self.stop = W.QDoubleSpinBox(), W.QDoubleSpinBox()
+        self.start, self.stop = ScientificDoubleSpinBox(), ScientificDoubleSpinBox()
         self.first, self.last = spin(0, len(time)-1), spin(0, len(time)-1)
         for box in (self.start, self.stop):
             box.setDecimals(9)
