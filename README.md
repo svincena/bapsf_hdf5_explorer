@@ -150,6 +150,12 @@ requirement.
    move the linked spatial cursor.
 7. Use **Save image…**, **Export MP4…**, or **Save data…** for output.
 
+The file dialogs remember separate folders for opening data, saving data,
+saving images, and exporting movies, including across app restarts. A folder
+is remembered after a successful read or write; canceling or a failed operation
+keeps the previous location. If a remembered folder is unavailable, the dialog
+starts in your home folder.
+
 Processing always starts from the imported original, so applying integration or
 gain twice does not apply the operation twice. **Reset processing** returns to
 the imported values. Changing Light/Dark appearance preserves the data,

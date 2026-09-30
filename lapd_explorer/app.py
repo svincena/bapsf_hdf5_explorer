@@ -21,8 +21,9 @@ STYLE = stylesheet("Light")
 
 
 class MainWindow(W.QMainWindow):
-    def __init__(self):
+    def __init__(self, *, settings=None):
         super().__init__()
+        self.settings = settings if settings is not None else C.QSettings("BaPSF", "LAPD Explorer")
         apply_appearance(W.QApplication.instance(), "Light")
         self.setWindowTitle("LAPD Explorer")
         self.resize(1480, 960)
@@ -287,17 +288,32 @@ class MainWindow(W.QMainWindow):
         layout.addWidget(buttons)
         dialog.exec()
 
+    def file_dialog_path(self, category, filename=""):
+        """Each operation starts in its own persistent directory."""
+        saved = self.settings.value(f"file_dialogs/{category}", "", type=str)
+        directory = Path(saved) if saved else Path.home()
+        if not directory.is_dir():
+            directory = Path.home()
+        return str(directory / filename)
+
+    def remember_file_location(self, category, path):
+        self.settings.setValue(f"file_dialogs/{category}", str(Path(path).absolute().parent))
+        self.settings.sync()
+
     def open_file(self):
-        path, _ = W.QFileDialog.getOpenFileName(self, "Open acquisition", "", "HDF5 (*.hdf5 *.h5 *.hdf);;All files (*)")
+        path, _ = W.QFileDialog.getOpenFileName(self, "Open acquisition", self.file_dialog_path("open_data"), "HDF5 (*.hdf5 *.h5 *.hdf);;All files (*)")
         if not path:
             return
+        def loaded(data):
+            self.set_data(data)
+            self.remember_file_location("open_data", path)
         def inspected(info):
             if info["portable"]:
-                self.launch(lambda: io.load_dataset(path), self.set_data, "Loading saved dataset…")
+                self.launch(lambda: io.load_dataset(path), loaded, "Loading saved dataset…")
             else:
                 dialog = ImportDialog(path, info, self)
                 if dialog.exec() == W.QDialog.Accepted:
-                    self.set_data(dialog.dataset)
+                    loaded(dialog.dataset)
         self.launch(lambda: io.inspect_file(path), inspected, "Discovering digitizers, channels and motion controls…")
 
     def set_data(self, data):
@@ -572,17 +588,18 @@ class MainWindow(W.QMainWindow):
         except ValueError as exc:
             self.error(str(exc))
             return
-        path, _ = W.QFileDialog.getSaveFileName(self, "Save visualization", "lapd-frame.png", "PNG (*.png);;SVG (*.svg);;PDF (*.pdf)")
+        path, _ = W.QFileDialog.getSaveFileName(self, "Save visualization", self.file_dialog_path("save_image", "lapd-frame.png"), "PNG (*.png);;SVG (*.svg);;PDF (*.pdf)")
         if path:
             try:
                 self.draw()
                 self.fig.savefig(path, dpi=200, facecolor=self.fig.get_facecolor())
+                self.remember_file_location("save_image", path)
                 self.statusBar().showMessage(f"Saved {path}")
             except Exception as exc:
                 self.error(str(exc))
 
     def save_data(self):
-        path, _ = W.QFileDialog.getSaveFileName(self, "Save processed dataset", "lapd-processed.h5", "HDF5 (*.h5)")
+        path, _ = W.QFileDialog.getSaveFileName(self, "Save processed dataset", self.file_dialog_path("save_data", "lapd-processed.h5"), "HDF5 (*.h5)")
         if path:
             if Path(path).resolve() == Path(self.raw.source).resolve():
                 self.error("Choose a new file to preserve the source acquisition.")
@@ -591,7 +608,10 @@ class MainWindow(W.QMainWindow):
             def save():
                 atomic_save(path, lambda tmp: io.save_dataset(tmp, data))
                 return path
-            self.launch(save, lambda p: self.statusBar().showMessage(f"Saved {p}"), "Saving processed data and provenance…")
+            def done(p):
+                self.remember_file_location("save_data", p)
+                self.statusBar().showMessage(f"Saved {p}")
+            self.launch(save, done, "Saving processed data and provenance…")
 
     def export_movie(self):
         self.stop_play()
@@ -605,7 +625,7 @@ class MainWindow(W.QMainWindow):
         except ValueError as exc:
             self.error(str(exc))
             return
-        path, _ = W.QFileDialog.getSaveFileName(self, "Export animation", "lapd-animation.mp4", "MP4 (*.mp4)")
+        path, _ = W.QFileDialog.getSaveFileName(self, "Export animation", self.file_dialog_path("save_movie", "lapd-animation.mp4"), "MP4 (*.mp4)")
         if not path:
             return
         progress = W.QProgressDialog("Rendering MP4 frames…", "Cancel", 0, 0, self)
@@ -621,6 +641,7 @@ class MainWindow(W.QMainWindow):
             return path
         def done(p):
             progress.close()
+            self.remember_file_location("save_movie", p)
             self.statusBar().showMessage(f"Exported {len(frames)} frames to {p}")
         self.launch(export, done, f"Exporting {len(frames)} frames at {fps} FPS…")
         # Also close progress when the worker fails or cancellation is observed.

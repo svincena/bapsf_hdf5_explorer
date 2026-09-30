@@ -75,6 +75,109 @@ def test_atomic_save_preserves_existing_destination_on_failure(tmp_path):
     assert not list(tmp_path.glob(".lapd-*"))
 
 
+def test_file_dialog_locations_are_independent_and_persist(app, monkeypatch, tmp_path):
+    from pathlib import Path
+    from PySide6 import QtCore as C
+    from lapd_explorer.widgets import Worker
+    settings_path = str(tmp_path / "preferences.ini")
+    settings = C.QSettings(settings_path, C.QSettings.IniFormat)
+    w = MainWindow(settings=settings)
+    data = Dataset({"A": np.arange(8.)}, ("time",), {"time": np.arange(8.)})
+    w.set_data(data)
+    operations = [("open_data", w.open_file, ""),
+                  ("save_data", w.save_data, "lapd-processed.h5"),
+                  ("save_image", w.save_image, "lapd-frame.png"),
+                  ("save_movie", w.export_movie, "lapd-animation.mp4")]
+    selected = ""
+    shown = []
+    def choose(parent, title, initial, filters):
+        shown.append(initial)
+        return selected, ""
+    monkeypatch.setattr(W.QFileDialog, "getOpenFileName", choose)
+    monkeypatch.setattr(W.QFileDialog, "getSaveFileName", choose)
+    # Canceling a dialog must not set preferences or inherit another category.
+    for category, operation, filename in operations:
+        operation()
+        assert shown[-1] == str(Path.home() / filename)
+        assert not settings.contains(f"file_dialogs/{category}")
+
+    def launch(fn, done, message):
+        w.jobs.append(Worker(fn, w))  # Movie dialog connects to the job's signals.
+        done(fn())
+    monkeypatch.setattr(w, "launch", launch)
+    monkeypatch.setattr("lapd_explorer.app.io.inspect_file", lambda path: {"portable": True})
+    monkeypatch.setattr("lapd_explorer.app.io.load_dataset", lambda path: data)
+    monkeypatch.setattr(w, "draw", lambda: None)
+    monkeypatch.setattr(w.fig, "savefig", lambda path, **kwargs: Path(path).write_bytes(b"image"))
+    monkeypatch.setattr("lapd_explorer.app.export_mp4", lambda path, *args: Path(path).write_bytes(b"movie"))
+    for category, operation, filename in operations:
+        directory = tmp_path / category
+        directory.mkdir()
+        selected = str(directory / (filename or "input.h5"))
+        operation()
+        assert settings.value(f"file_dialogs/{category}") == str(directory)
+        assert w.file_dialog_path(category, filename) == str(directory / filename)
+    w.redraw_timer.stop()
+    w.close()
+
+    # A new settings object/window simulates restarting the application.
+    restored = MainWindow(settings=C.QSettings(settings_path, C.QSettings.IniFormat))
+    for category, _, filename in operations:
+        assert restored.file_dialog_path(category, filename) == str(tmp_path / category / filename)
+    restored.settings.setValue("file_dialogs/save_image", str(tmp_path / "deleted-directory"))
+    assert restored.file_dialog_path("save_image", "lapd-frame.png") == str(Path.home() / "lapd-frame.png")
+    assert restored.file_dialog_path("save_data") == str(tmp_path / "save_data")
+    restored.redraw_timer.stop()
+    restored.close()
+
+
+def test_failed_io_and_canceled_import_preserve_locations(app, monkeypatch, tmp_path):
+    from PySide6 import QtCore as C
+    settings = C.QSettings(str(tmp_path / "preferences.ini"), C.QSettings.IniFormat)
+    w = MainWindow(settings=settings)
+    previous = tmp_path / "previous"
+    previous.mkdir()
+    for category in ("open_data", "save_data", "save_image", "save_movie"):
+        w.remember_file_location(category, previous / "old.h5")
+    selected = str(tmp_path / "new.h5")
+    monkeypatch.setattr(W.QFileDialog, "getOpenFileName", lambda *args: (selected, ""))
+    monkeypatch.setattr(W.QFileDialog, "getSaveFileName", lambda *args: (selected, ""))
+    errors = []
+    monkeypatch.setattr(w, "error", errors.append)
+    def fail(*args, **kwargs):
+        raise OSError("Test I/O failure")
+    def launch(fn, done, message):
+        from lapd_explorer.widgets import Worker
+        w.jobs.append(Worker(fn, w))
+        try:
+            result = fn()
+        except OSError as exc:
+            errors.append(str(exc))
+        else:
+            done(result)
+    monkeypatch.setattr(w, "launch", launch)
+    monkeypatch.setattr("lapd_explorer.app.io.inspect_file", fail)
+    monkeypatch.setattr("lapd_explorer.app.io.save_dataset", fail)
+    monkeypatch.setattr(w, "draw", lambda: None)
+    monkeypatch.setattr(w.fig, "savefig", fail)
+    monkeypatch.setattr("lapd_explorer.app.export_mp4", fail)
+    for operation in (w.open_file, w.save_data, w.save_image, w.export_movie):
+        operation()
+    assert len(errors) == 4
+    monkeypatch.setattr("lapd_explorer.app.io.inspect_file", lambda path: {"portable": False})
+    class CanceledImport:
+        def __init__(self, *args):
+            pass
+        def exec(self):
+            return W.QDialog.Rejected
+    monkeypatch.setattr("lapd_explorer.app.ImportDialog", CanceledImport)
+    w.open_file()
+    for category in ("open_data", "save_data", "save_image", "save_movie"):
+        assert w.file_dialog_path(category) == str(previous)
+    w.redraw_timer.stop()
+    w.close()
+
+
 def test_import_dialog_applies_shot_guess_and_keeps_fields_editable(app, monkeypatch):
     info = {
         "channels": [{"digitizer": "D", "config_name": "cfg", "adc": "A",
