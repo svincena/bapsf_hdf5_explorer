@@ -588,3 +588,50 @@ def test_theme_text_and_trace_contrast():
             assert contrast(theme[foreground], theme[background]) >= 4.5
         for curve in ("accent", "secondary", "third", "cursor"):
             assert contrast(theme[curve], theme["panel"]) >= 3
+
+
+def test_manual_colormap_range_playback_and_export(app):
+    from lapd_explorer import plotting
+    w = MainWindow()
+    values = np.arange(24.).reshape(2, 3, 4)
+    data = Dataset({"A": values}, ("y", "x", "time"),
+                   {"y": np.arange(2), "x": np.arange(3), "time": np.arange(4)})
+    w.set_data(data)
+    w.draw()
+    control = w.color_range
+    assert control.mode.currentText() == "Automatic"
+    assert w.options()["color_limits"] is None
+    np.testing.assert_allclose(w.main_ax.collections[0].get_clim(), (0, 23))
+    w.lock.setChecked(False)
+    w.draw()
+    np.testing.assert_allclose(w.main_ax.collections[0].get_clim(), (0, 20))
+    control.mode.setCurrentText("Manual")
+    control.minimum.setText("-2e1")
+    control.maximum.setText("1e1")
+    control.accept_limits()
+    w.draw()
+    mesh = w.main_ax.collections[0]
+    for frame in (1, 3, 0):
+        w.frame.setValue(frame)
+        w.draw()
+        assert w.main_ax.collections[0] is mesh
+        np.testing.assert_allclose(mesh.get_clim(), (-20, 10))
+        np.testing.assert_allclose(mesh.get_array(), values[..., frame])
+    for lower, upper in [("10", "10"), ("20", "10"), ("nan", "10"), ("-20", "inf"), ("bad", "10")]:
+        control.minimum.setText(lower)
+        control.maximum.setText(upper)
+        control.accept_limits()
+        assert w.options()["color_limits"] == (-20, 10)
+    exported = plotting.figure()
+    plotting.render(exported, data, w.options())
+    exported._lapd_update_frame(3)
+    np.testing.assert_allclose(exported.axes[0].collections[0].get_clim(), (-20, 10))
+    exported.clear()
+    control.mode.setCurrentText("Automatic")
+    w.frame.setValue(3)
+    w.draw()
+    np.testing.assert_allclose(w.main_ax.collections[0].get_clim(), (3, 23))
+    w.set_data(Dataset({"A": np.ones(4)}, ("time",), {"time": np.arange(4)}))
+    assert control.isHidden()
+    assert w.options()["color_limits"] is None
+    w.close()

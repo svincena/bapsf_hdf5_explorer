@@ -104,6 +104,11 @@ def render(fig, data, opts, values=None):
         lo, hi = (float(finite.min()), float(finite.max())) if finite.size else (0, 1)
         if lo == hi:
             lo, hi = lo-.5, hi+.5
+        color_limits = opts.get("color_limits")
+        if color_limits is not None:
+            lo, hi = color_limits
+            if not np.all(np.isfinite((lo, hi))) or lo >= hi:
+                raise ValueError("Colormap limits must be finite, with minimum < maximum.")
         mesh = ax.pcolormesh(horizontal, vertical, frame, cmap=opts["cmap"],
                              shading="nearest", vmin=lo, vmax=hi, rasterized=True)
         ax.grid(False)
@@ -200,7 +205,7 @@ def render(fig, data, opts, values=None):
         if len(spatial) == 2:
             frame = values[..., frame_index]
             mesh.set_array(frame)
-            if not opts["lock"]:
+            if not opts["lock"] and color_limits is None:
                 finite = frame[np.isfinite(frame)]
                 if finite.size:
                     lo, hi = finite.min(), finite.max()

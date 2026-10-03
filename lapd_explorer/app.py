@@ -11,7 +11,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolb
 from .model import demo, preprocess, quantity
 from . import io, plotting
 from .widgets import (Worker, ImportDialog, SmoothingDialog, SpatialAveragingDialog,
-                      SliceAxisControls, combo, spin)
+                      SliceAxisControls, ColormapRangeControls, combo, spin)
 from .smoothing import DEFAULT_SMOOTHING
 from .spatial import DEFAULT_SPATIAL_AVERAGING
 from .appearance import FacilityLogo, apply_appearance, colors, stylesheet
@@ -107,6 +107,9 @@ class MainWindow(W.QMainWindow):
         self.lock = W.QCheckBox("Fixed scale across time")
         self.lock.setChecked(True)
         sf.addRow(self.lock)
+        self.color_range = ColormapRangeControls()
+        self.color_range.changed.connect(self.schedule_draw)
+        sf.addRow(self.color_range)
         controls.addWidget(signal)
         pp = W.QGroupBox("02   PREPROCESSING")
         pf = W.QFormLayout(pp)
@@ -356,6 +359,8 @@ class MainWindow(W.QMainWindow):
         self.spatial_average.setEnabled(plane)
         self.spatial_button.setEnabled(plane and self.spatial_average.isChecked())
         self.slice_axis_panel.setVisible(plane)
+        self.color_range.setVisible(plane)
+        self.color_range.setTitle(f"Mesh colormap range ({data.units})")
         if plane:
             for control, dim in zip(self.slice_axis_controls, reversed(data.spatial_dims)):
                 control.setTitle(f"{dim} slice · vertical axis ({data.units})")
@@ -489,6 +494,8 @@ class MainWindow(W.QMainWindow):
                     slices=[w.value() for w in self.slice_boxes], time=self.slider.value(),
                     time_unit=self.time_unit.currentText(), sigfigs=self.sigfigs.value(),
                     lock=self.lock.isChecked(), cmap=self.cmap.currentText(), arrow_cmap=self.arrow_cmap.currentText(),
+                    color_limits=(self.color_range.settings().get("limits")
+                                  if len(self.data.spatial_dims) == 2 else None),
                     slice_axes=[dict(control.settings(), view=view)
                                 for control, view in zip(self.slice_axis_controls, self._slice_views)])
 
@@ -536,6 +543,8 @@ class MainWindow(W.QMainWindow):
                     remember(axis)
                 self.toolbar.push_current()
                 self._render_key = render_key
+            if len(self.data.spatial_dims) == 2:
+                self.color_range.show_limits(self.main_ax.collections[0].get_clim())
             self.canvas.draw_idle()
             t = self.data.coords["time"][opts["time"]] * plotting.TIME_UNITS[opts["time_unit"]]
             self.time_label.setText(f"{t:.{opts['sigfigs']}g} {opts['time_unit']}")

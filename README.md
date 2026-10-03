@@ -332,6 +332,13 @@ matching physical units and calibration. Mesh and arrow colormaps are
 independent; colored arrows receive their own scale bar. **Fixed scale across
 time** locks both color ranges.
 
+For 2D planes, **Mesh colormap range** defaults to **Automatic**, preserving
+the current scaling method. Choose **Manual** and enter Min/Max in displayed
+signal units (decimal or scientific notation) to keep those color bounds fixed
+for all times, including movie exports. Manual mesh bounds override the fixed
+scale checkbox for the mesh; arrow colors still follow that checkbox. Invalid
+bounds retain the previous valid range.
+
 Frame stride changes playback/export sampling only. Processing, cursor traces,
 and PSD use the full time resolution. The line position–time preview may
 subsample its display to remain responsive.

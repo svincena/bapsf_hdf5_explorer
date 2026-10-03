@@ -363,6 +363,26 @@ class SliceAxisControls(W.QGroupBox):
         self.show_limits((-1., 1.))
 
 
+class ColormapRangeControls(SliceAxisControls):
+    """Optional fixed mesh color bounds, in displayed signal units."""
+    MODES = {"Automatic": "auto", "Manual": "manual"}
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setTitle("Mesh colormap range")
+
+    def mode_changed(self):
+        manual = self.mode.currentText() == "Manual"
+        self.minimum.setEnabled(manual)
+        self.maximum.setEnabled(manual)
+        self.message.setText("Enter min/max, then press Enter or leave the field." if manual else
+                             "Use the current automatic scaling method.")
+        if manual:
+            self.accept_limits()
+        else:
+            self.changed.emit()
+
+
 class SpatialAveragingDialog(W.QDialog):
     """Configure spatial neighborhoods in the displayed plane's axis order."""
     METHODS = {"Box average": "box", "Gaussian average": "gaussian",
