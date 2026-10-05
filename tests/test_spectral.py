@@ -3,10 +3,11 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/lapd-matplotlib")
 from dataclasses import replace
+import threading
 import time
 import numpy as np
 import pytest
-from scipy import signal
+from scipy import fft, signal
 from lapd_explorer.model import Dataset
 from lapd_explorer import spectral as sp
 
@@ -21,6 +22,12 @@ def acquisition(dims=(), shape=(), phase=.6):
                    shot_numbers=np.arange(int(np.prod(shape))).reshape(shape))
     settings = sp.Settings(interval=(t[0], t[-1]), nperseg=128, nfft=256, overlap=64, max_lag=20)
     return data, settings
+
+
+@pytest.mark.parametrize("cpus,workers", [(None, 1), (1, 1), (2, 1), (3, 1), (8, 4), (9, 4)])
+def test_default_fft_workers_use_half_cpus(monkeypatch, cpus, workers):
+    monkeypatch.setattr(sp.os, "cpu_count", lambda: cpus)
+    assert sp.Settings().fft_workers == workers
 
 
 def test_welch_cross_sign_coherence_and_coherent_amplitude():
@@ -133,6 +140,47 @@ def test_median_and_incoherent_signals():
     np.testing.assert_allclose(r.values("Cross-power"), expected)
 
 
+@pytest.mark.parametrize("names", [("A",), ("A", "B")])
+@pytest.mark.parametrize("average", ["mean", "median"])
+def test_fft_workers_match_serial_results(names, average):
+    data, s = acquisition(("shot",), (70,))
+    rng = np.random.default_rng(42)
+    data.channels = {n: rng.normal(size=a.shape) for n, a in data.channels.items()}
+    data.channels["A"][3, 0] = np.nan
+    serial = sp.process(data, names, replace(s, average=average, fft_workers=1))
+    parallel = sp.process(data, names, replace(s, average=average, fft_workers=2))
+    np.testing.assert_array_equal(parallel.frequency, serial.frequency)
+    np.testing.assert_array_equal(parallel.lags, serial.lags)
+    assert parallel.failures == serial.failures == [((3,), "Nonfinite samples in selected interval")]
+    for key in serial.arrays:
+        np.testing.assert_allclose(parallel.arrays[key], serial.arrays[key], rtol=1e-12, atol=1e-14)
+
+
+@pytest.mark.parametrize("outcome", ["success", "canceled", "failure"])
+def test_fft_worker_context_restored(monkeypatch, outcome):
+    data, s = acquisition(("shot",), (70,))
+    original = sp._estimates
+    observed = []
+    def estimates(*args):
+        observed.append(fft.get_workers())
+        if outcome == "failure":
+            raise RuntimeError("unexpected estimator failure")
+        return original(*args)
+    monkeypatch.setattr(sp, "_estimates", estimates)
+    progress = []
+    with fft.set_workers(3):
+        kwargs = dict(progress=lambda n, total: progress.append(n),
+                      canceled=lambda: outcome == "canceled" and bool(progress))
+        if outcome == "success":
+            sp.process(data, ("A", "B"), replace(s, fft_workers=2), **kwargs)
+        else:
+            with pytest.raises(ValueError if outcome == "canceled" else RuntimeError,
+                               match="canceled" if outcome == "canceled" else "unexpected"):
+                sp.process(data, ("A", "B"), replace(s, fft_workers=2), **kwargs)
+        assert fft.get_workers() == 3
+    assert observed and set(observed) == {2}
+
+
 def test_estimator_failure_isolated_and_input_selection_validation(monkeypatch):
     data, s = acquisition(("shot",), (3,))
     original = sp._estimates
@@ -171,7 +219,9 @@ def test_animation_preserves_polarization_and_spatial_phase():
 
 @pytest.mark.parametrize("changes,match", [({"overlap": 128}, "Overlap"), ({"nperseg": 2000}, "Segment"),
     ({"nfft": 32}, "FFT"), ({"interval": (1., 2.)}, "Interval"), ({"max_lag": 1024}, "lag"),
-    ({"average": "bad"}, "averaging"), ({"window": "bad"}, "window"), ({"nfft": 128.5}, "integer")])
+    ({"average": "bad"}, "averaging"), ({"window": "bad"}, "window"), ({"nfft": 128.5}, "integer"),
+    ({"fft_workers": 0}, "FFT workers"), ({"fft_workers": -1}, "FFT workers"),
+    ({"fft_workers": 1.5}, "integer"), ({"fft_workers": True}, "integer")])
 def test_invalid_estimator_settings(changes, match):
     data, s = acquisition()
     with pytest.raises(ValueError, match=match):
@@ -209,6 +259,9 @@ def test_gui_geometry_cached_views_intervals_and_animation(app, tmp_path, monkey
     app.processEvents()
     result = sp.process(data, ("A", "B"), s)
     dialog.batch_ready(result)
+    dialog.fft_workers.setValue(1)
+    assert dialog.batch is result
+    assert dialog.collect().fft_workers == s.fft_workers == 1
     def no_fft(*args, **kwargs):
         pytest.fail("Display changes must not recalculate spectra")
     monkeypatch.setattr(sp.signal, "welch", no_fft)
@@ -275,6 +328,16 @@ def test_main_selection_worker_persistence_and_preprocessing(app, monkeypatch):
     dialog = w.spectral_dialog
     assert dialog.index() == (2, 1)
     assert dialog.names == ("A", "B") and not dialog.vector
+    worker_count = min(2, dialog.fft_workers.maximum())
+    dialog.fft_workers.setValue(worker_count)
+    observed = []
+    original = sp._estimates
+    gui_thread = threading.get_ident()
+    previous_workers = fft.get_workers()
+    def estimates(*args):
+        observed.append((threading.get_ident(), fft.get_workers()))
+        return original(*args)
+    monkeypatch.setattr(sp, "_estimates", estimates)
     def wait():
         deadline = time.monotonic()+15
         while not dialog.action_buttons[0].isEnabled() and time.monotonic() < deadline:
@@ -288,9 +351,13 @@ def test_main_selection_worker_persistence_and_preprocessing(app, monkeypatch):
     wait()
     batch = dialog.batch
     assert batch is not None
+    assert batch.settings.fft_workers == worker_count
+    assert observed and all(t != gui_thread and n == worker_count for t, n in observed)
+    assert fft.get_workers() == previous_workers
     dialog.reject()
     w.open_spectral()
     assert w.spectral_dialog is dialog and dialog.batch is batch
+    assert dialog.fft_workers.value() == worker_count
     dialog.reject()
     processed = preprocess(data, average=True, gain=2)
     w.processed(processed)
@@ -299,6 +366,7 @@ def test_main_selection_worker_persistence_and_preprocessing(app, monkeypatch):
     new = w.spectral_dialog
     assert new is not dialog and new.data is processed
     assert new.names == ("A",)
+    assert new.fft_workers.value() == worker_count
     assert not new.quantity.model().item(2).isEnabled()
     assert not new.average_shots.isEnabled()
     new.reject()

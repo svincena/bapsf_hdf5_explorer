@@ -1,5 +1,6 @@
 """Browser spectral workflow; estimators and result coordinates live in spectral.py."""
 import copy
+import os
 import threading
 import numpy as np
 from PySide6 import QtCore as C, QtWidgets as W
@@ -81,6 +82,8 @@ class SpectralDialog(W.QDialog):
         form.addRow(W.QLabel(f"Sampling: {self.fs:g} Hz · Δt = {1/self.fs:g} s"))
         self.nperseg = spin(4, 2**24, settings.nperseg)
         self.nfft = spin(4, 2**24, settings.nfft)
+        self.fft_workers = spin(1, max(os.cpu_count() or 1, settings.fft_workers), settings.fft_workers)
+        self.fft_workers.setToolTip("Maximum threads for batched FFTs. Use 1 for serial FFTs; more workers may help large datasets but can slow small jobs.")
         self.overlap = spin(0, 2**24, settings.overlap)
         self.max_lag = spin(0, len(data.coords["time"])-1, settings.max_lag)
         self.window = combo(["hann", "hamming", "blackman", "boxcar"])
@@ -92,6 +95,7 @@ class SpectralDialog(W.QDialog):
         self.average_shots.setEnabled("shot" in data.dims)
         self.average_shots.setToolTip("Off: process stored shots independently. On: average waveforms at each position/case first. If the main browser already averaged shots, that average is the input.")
         for key, label in [("nperseg", "Segment samples"), ("nfft", "FFT samples"),
+                           ("fft_workers", "FFT workers"),
                            ("overlap", "Overlap samples"), ("window", "Window"),
                            ("detrend", "Detrend per segment"), ("average", "Segment averaging"),
                            ("max_lag", "Maximum covariance lag (samples)")]:
@@ -208,6 +212,7 @@ class SpectralDialog(W.QDialog):
         self.editor.changed.connect(self.window_changed)
         for widget in (self.nperseg, self.nfft, self.overlap, self.max_lag):
             widget.valueChanged.connect(self.settings_changed)
+        self.fft_workers.valueChanged.connect(lambda value: setattr(self.settings, "fft_workers", value))
         for widget in (self.window, self.detrend, self.average):
             widget.currentTextChanged.connect(self.settings_changed)
         self.average_shots.toggled.connect(self.settings_changed)
@@ -247,7 +252,7 @@ class SpectralDialog(W.QDialog):
                               nperseg=self.nperseg.value(), nfft=self.nfft.value(), overlap=self.overlap.value(),
                               window=self.window.currentText(), detrend=self.detrend.currentText(),
                               average=self.average.currentText(), average_shots=self.average_shots.isChecked(),
-                              max_lag=self.max_lag.value())
+                              max_lag=self.max_lag.value(), fft_workers=self.fft_workers.value())
         self.settings.__dict__.update(vars(s))
         return copy.deepcopy(s)
 

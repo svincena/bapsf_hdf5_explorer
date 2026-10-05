@@ -22,7 +22,11 @@ channels. Spectral analysis additionally requires a uniform, finite time base.
 2. Set segment length, FFT length, overlap in samples, window, detrending, and
    segment averaging. Sampling rate is read from the time coordinates. FFT
    length may exceed segment length for zero padding. Maximum covariance lag
-   controls the stored lag range, in samples.
+   controls the stored lag range, in samples. **FFT workers** sets the maximum
+   threads for batched FFTs, defaulting to half the detected logical CPUs,
+   rounded down, with a minimum of one worker.
+   Select one for serial FFTs. More workers can help larger jobs but may slow
+   small jobs; compare processing times on representative data.
 3. **Process This Point/Shot** previews that location. **Process All** computes
    every position, case, and stored repeat in a background worker, with progress
    and cancellation. Nonfinite input or numerical failures at a location produce
@@ -49,6 +53,8 @@ with the same dataset and channel assignments reuses them. Changing inputs
 creates a new dialog; estimator settings persist. Changing an estimator or the
 interval invalidates spectra. Changing location, quantity, representation,
 frequency, phase, color map, or animation mode does not run another FFT.
+Changing FFT workers retains cached spectra and applies to the next processing
+job. This setting persists when reopening the dialog or changing inputs.
 
 ## Numerical conventions
 
@@ -167,6 +173,10 @@ failure list. Coherency and phase derive from cached spectra only when needed.
 Point processing selects traces before repeat averaging. Full processing uses
 bounded vectorized chunks to limit temporary STFT memory. Persistent output
 memory still scales with the number of locations/shots and requested bins.
+Chunks remain sequential; SciPy FFT workers parallelize independent transforms
+inside a batch. The worker setting is scoped to the analysis thread and restored
+when processing finishes, fails, or is canceled. Cancellation remains available
+between chunks. The per-trace covariance loop remains sequential.
 
 Only a requested real spatial frame is adapted to the existing singleton-time
 Dataset convention already used by Langmuir. `plotting.render_derived` handles

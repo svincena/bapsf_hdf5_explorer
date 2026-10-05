@@ -6,10 +6,11 @@ Positive arg(S_AB) means B leads A. Covariances remove the interval mean
 and use a fixed N denominator: R_AB[k] = sum A[n]*B[n+k]/N.
 Coherent peak phasors are a separate estimator, described in docs/spectral.md.
 """
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import copy
+import os
 import numpy as np
-from scipy import signal
+from scipy import fft, signal
 from .model import Dataset
 from .langmuir import interval_slice
 
@@ -32,6 +33,7 @@ class Settings:
     average: str = "mean"
     average_shots: bool = False
     max_lag: int = 128
+    fft_workers: int = field(default_factory=lambda: max(1, (os.cpu_count() or 1) // 2))
 
 
 def sampling_rate(time):
@@ -54,10 +56,12 @@ def validate(data, names, settings):
     fs = sampling_rate(data.coords["time"])
     s = settings
     window = interval_slice(data.coords["time"], s.interval, minimum=4)
-    for name in ("nperseg", "nfft", "overlap", "max_lag"):
+    for name in ("nperseg", "nfft", "overlap", "max_lag", "fft_workers"):
         value = getattr(s, name)
         if not isinstance(value, (int, np.integer)) or isinstance(value, bool):
             raise ValueError(f"{name} must be an integer.")
+    if s.fft_workers < 1:
+        raise ValueError("FFT workers must be at least 1.")
     if not 4 <= s.nperseg <= window.stop-window.start:
         raise ValueError("Segment length must be at least 4 and no larger than the selected sample count.")
     if s.nfft < s.nperseg:
@@ -276,34 +280,37 @@ def process(data, names, settings, progress=None, canceled=None, index=None):
     segments = 1 + (window.stop-window.start-settings.nperseg)//(settings.nperseg-settings.overlap)
     chunk = max(1, min(64, 1_000_000//max(len(frequency)*segments, window.stop-window.start)))
     failures = []
-    for start in range(0, total, chunk):
-        if canceled is not None and canceled():
-            raise ValueError("Spectral processing canceled; previous results retained.")
-        indices = [np.unravel_index(i, shape) for i in range(start, min(total, start+chunk))]
-        traces = [np.stack([source.channels[n][i][window] for i in indices]) for n in names]
-        valid = np.logical_and.reduce([np.all(np.isfinite(a), axis=-1) for a in traces])
-        failures.extend((indices[i], "Nonfinite samples in selected interval") for i in np.flatnonzero(~valid))
-        if valid.any():
-            good = [i for i, ok in zip(indices, valid) if ok]
-            finite_traces = [a[valid] for a in traces]
+    # SciPy's worker context is local to the calling thread. Enter it here,
+    # inside the GUI's background worker, and restore it even on cancellation.
+    with fft.set_workers(settings.fft_workers):
+        for start in range(0, total, chunk):
+            if canceled is not None and canceled():
+                raise ValueError("Spectral processing canceled; previous results retained.")
+            indices = [np.unravel_index(i, shape) for i in range(start, min(total, start+chunk))]
+            traces = [np.stack([source.channels[n][i][window] for i in indices]) for n in names]
+            valid = np.logical_and.reduce([np.all(np.isfinite(a), axis=-1) for a in traces])
+            failures.extend((indices[i], "Nonfinite samples in selected interval") for i in np.flatnonzero(~valid))
+            if valid.any():
+                good = [i for i, ok in zip(indices, valid) if ok]
+                finite_traces = [a[valid] for a in traces]
 
-            def save(estimates, locations):
-                for row, i in enumerate(locations):
-                    if not all(np.all(np.isfinite(a[row])) for a in estimates.values()):
-                        failures.append((i, "Nonfinite spectral estimates (check signal scale)"))
-                    else:
-                        for key, values in estimates.items():
-                            arrays[key][i] = values[row]
+                def save(estimates, locations):
+                    for row, i in enumerate(locations):
+                        if not all(np.all(np.isfinite(a[row])) for a in estimates.values()):
+                            failures.append((i, "Nonfinite spectral estimates (check signal scale)"))
+                        else:
+                            for key, values in estimates.items():
+                                arrays[key][i] = values[row]
 
-            try:
-                save(_estimates(finite_traces, fs, settings), good)
-            except (ValueError, FloatingPointError):
-                # An estimator failure in one trace must not discard its peers.
-                for row, i in enumerate(good):
-                    try:
-                        save(_estimates([a[row:row+1] for a in finite_traces], fs, settings), [i])
-                    except (ValueError, FloatingPointError) as exc:
-                        failures.append((i, str(exc)))
-        if progress is not None:
-            progress(min(total, start+chunk), total)
+                try:
+                    save(_estimates(finite_traces, fs, settings), good)
+                except (ValueError, FloatingPointError):
+                    # An estimator failure in one trace must not discard its peers.
+                    for row, i in enumerate(good):
+                        try:
+                            save(_estimates([a[row:row+1] for a in finite_traces], fs, settings), [i])
+                        except (ValueError, FloatingPointError) as exc:
+                            failures.append((i, str(exc)))
+            if progress is not None:
+                progress(min(total, start+chunk), total)
     return Result(source, tuple(names), copy.deepcopy(settings), frequency, lags, arrays, failures)
