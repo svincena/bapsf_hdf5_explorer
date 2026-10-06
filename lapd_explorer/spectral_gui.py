@@ -8,7 +8,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolb
 from . import spectral as analysis, plotting
 from .appearance import FacilityLogo, colors
 from .langmuir_gui import IntervalEditor, TraceView
-from .widgets import ScientificDoubleSpinBox, Worker, combo, spin
+from .widgets import ScientificDoubleSpinBox, Worker, combo, spin, form_layout
 
 
 def number(value=0., low=-1e15, high=1e15, decimals=6):
@@ -60,10 +60,9 @@ class SpectralDialog(W.QDialog):
         scroll.setWidgetResizable(True)
         self.control_tabs = W.QTabWidget()
         self.controls = W.QWidget()
-        form = W.QFormLayout(self.controls)
-        form.setRowWrapPolicy(W.QFormLayout.WrapLongRows)
+        form = form_layout(self.controls)
         scroll.setWidget(self.controls)
-        self.control_tabs.setMinimumWidth(390)
+        self.control_tabs.setMinimumWidth(315)
         self.control_tabs.addTab(scroll, "Estimate")
         split.addWidget(self.control_tabs)
         self.indices = {}
@@ -119,8 +118,7 @@ class SpectralDialog(W.QDialog):
         self.result_canvas.mpl_connect("button_press_event", self.result_clicked)
 
         display = W.QGroupBox("Cached result display")
-        df = W.QFormLayout(display)
-        df.setRowWrapPolicy(W.QFormLayout.WrapAllRows)
+        df = form_layout(display)
         self.quantity = combo(list(analysis.SINGLE + analysis.PAIRED))
         for i in range(len(analysis.SINGLE), self.quantity.count()):
             self.quantity.model().item(i).setEnabled(len(names) == 2)
@@ -156,8 +154,7 @@ class SpectralDialog(W.QDialog):
         self.control_tabs.addTab(display_scroll, "Display")
 
         animation = W.QGroupBox("Animation")
-        af = W.QFormLayout(animation)
-        af.setRowWrapPolicy(W.QFormLayout.WrapAllRows)
+        af = form_layout(animation)
         self.animation_mode = combo(["Frequency at fixed phase", "Phase at fixed frequency"])
         self.animation_mode.model().item(1).setEnabled(len(names) == 2)
         self.interpretation = combo(["Quantity representation", "Phase projection", "Vector components"])

@@ -11,7 +11,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolb
 from .model import demo, preprocess, quantity
 from . import io, plotting
 from .widgets import (Worker, ImportDialog, SmoothingDialog, SpatialAveragingDialog,
-                      SliceAxisControls, ColormapRangeControls, combo, spin)
+                      SliceAxisControls, ColormapRangeControls, combo, spin, form_layout, numeric_edit)
 from .smoothing import DEFAULT_SMOOTHING
 from .spatial import DEFAULT_SPATIAL_AVERAGING
 from .appearance import FacilityLogo, apply_appearance, colors, stylesheet
@@ -44,7 +44,7 @@ class MainWindow(W.QMainWindow):
         root = W.QWidget()
         self.setCentralWidget(root)
         layout = W.QVBoxLayout(root)
-        layout.setContentsMargins(22, 18, 22, 10)
+        layout.setContentsMargins(12, 12, 12, 8)
         top = W.QHBoxLayout()
         brandcol = W.QVBoxLayout()
         brand = W.QLabel("LAPD  /  EXPLORER")
@@ -60,38 +60,46 @@ class MainWindow(W.QMainWindow):
         top.addStretch()
         top.addWidget(W.QLabel("Appearance"))
         self.appearance = combo(["Light", "Dark"])
+        self.appearance.setMinimumContentsLength(5)
         self.appearance.setToolTip("Change the application and plot appearance.")
         top.addWidget(self.appearance)
+        layout.addLayout(top)
+        # Qt provides an overflow menu when the action bar cannot fit, allowing
+        # the plotting workspace to shrink on smaller screens.
+        self.actions_toolbar = W.QToolBar()
+        self.actions_toolbar.setToolButtonStyle(C.Qt.ToolButtonTextOnly)
+        self.actions_toolbar.setSizePolicy(W.QSizePolicy.Expanding, W.QSizePolicy.Fixed)
         for text, callback in [("Open HDF5…", self.open_file), ("Demo", lambda: self.set_data(demo())),
                                ("Run info", self.show_info),
                                ("Langmuir…", self.open_langmuir),
                                ("Spectral Analysis…", self.open_spectral),
                                ("Save image…", self.save_image), ("Export MP4…", self.export_movie),
                                ("Save data…", self.save_data)]:
-            button = W.QPushButton(text)
-            button.clicked.connect(callback)
-            top.addWidget(button)
-        layout.addLayout(top)
+            action = self.actions_toolbar.addAction(text)
+            action.triggered.connect(callback)
+        layout.addWidget(self.actions_toolbar)
         self.source = W.QLabel()
         self.source.setObjectName("subtitle")
         self.source.setTextInteractionFlags(C.Qt.TextSelectableByMouse)
+        self.source.setWordWrap(True)
         layout.addWidget(self.source)
         split = W.QSplitter()
         layout.addWidget(split, 1)
         scroll = W.QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setMinimumWidth(330)
+        scroll.setMinimumWidth(285)
         scroll.setHorizontalScrollBarPolicy(C.Qt.ScrollBarAlwaysOff)
-        scroll.setMaximumWidth(360)
+        scroll.setMaximumWidth(380)
         sidebar = W.QWidget()
         controls = W.QVBoxLayout(sidebar)
-        controls.setContentsMargins(0, 0, 10, 0)
+        controls.setContentsMargins(0, 0, 4, 0)
+        controls.setSpacing(6)
         scroll.setWidget(sidebar)
         split.addWidget(scroll)
         signal = W.QGroupBox("01   QUANTITY")
-        sf = W.QFormLayout(signal)
+        sf = form_layout(signal)
         self.mode = combo(["Scalar", "Absolute", "Magnitude", "Vector"])
-        self.components = [W.QComboBox() for _ in range(3)]
+        self.components = [combo([]) for _ in range(3)]
         sf.addRow("Display", self.mode)
         for label, widget in zip(["Scalar / horizontal", "Vertical component", "Third component"], self.components):
             sf.addRow(label, widget)
@@ -112,11 +120,11 @@ class MainWindow(W.QMainWindow):
         sf.addRow(self.color_range)
         controls.addWidget(signal)
         pp = W.QGroupBox("02   PREPROCESSING")
-        pf = W.QFormLayout(pp)
+        pf = form_layout(pp)
         self.average = W.QCheckBox("Average stored shots")
         self.baseline = combo(["None", "Remove mean", "Linear detrend"])
         self.integrate = W.QCheckBox("Cumulative integration")
-        self.gain = W.QLineEdit("1")
+        self.gain = numeric_edit("1")
         pf.addRow(self.average)
         pf.addRow("Baseline", self.baseline)
         pf.addRow(self.integrate)
@@ -156,7 +164,7 @@ class MainWindow(W.QMainWindow):
         pf.addRow(self.history)
         controls.addWidget(pp)
         selection = W.QGroupBox("03   DIMENSIONS & SLICES")
-        df = W.QFormLayout(selection)
+        df = form_layout(selection)
         self.case, self.shot = spin(), spin()
         df.addRow("Case index", self.case)
         df.addRow("Repeat index", self.shot)
@@ -170,7 +178,7 @@ class MainWindow(W.QMainWindow):
         df.addRow(self.cursor)
         controls.addWidget(selection)
         timegroup = W.QGroupBox("04   TIME & EXPORT")
-        tf = W.QFormLayout(timegroup)
+        tf = form_layout(timegroup)
         self.time_unit = combo(list(plotting.TIME_UNITS))
         self.time_unit.setCurrentText("µs")
         self.sigfigs = spin(1, 12, 4)
@@ -195,7 +203,7 @@ class MainWindow(W.QMainWindow):
         plot_row = W.QHBoxLayout()
         plot_row.addWidget(self.canvas, 1)
         self.slice_axis_panel = W.QWidget()
-        self.slice_axis_panel.setFixedWidth(210)
+        self.slice_axis_panel.setFixedWidth(180)
         limits_layout = W.QVBoxLayout(self.slice_axis_panel)
         limits_layout.setContentsMargins(0, 0, 0, 0)
         self.slice_axis_controls = [SliceAxisControls(), SliceAxisControls()]
@@ -217,6 +225,7 @@ class MainWindow(W.QMainWindow):
         timeline.addWidget(self.time_label)
         wl.addLayout(timeline)
         split.addWidget(workspace)
+        split.setSizes([330, 1100])
         split.setStretchFactor(1, 1)
         self.canvas.mpl_connect("button_press_event", self.clicked)
         self.slider.valueChanged.connect(self.frame.setValue)
@@ -363,7 +372,7 @@ class MainWindow(W.QMainWindow):
         self.color_range.setTitle(f"Mesh colormap range ({data.units})")
         if plane:
             for control, dim in zip(self.slice_axis_controls, reversed(data.spatial_dims)):
-                control.setTitle(f"{dim} slice · vertical axis ({data.units})")
+                control.setTitle(f"{dim} slice limits ({data.units})")
         self.average.setEnabled("shot" in self.raw.dims and len(self.raw.coords["shot"]) > 1)
         for dim, widget in [("case", self.case), ("shot", self.shot)]:
             widget.setRange(0, len(data.coords.get(dim, [0]))-1)

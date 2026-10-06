@@ -187,6 +187,14 @@ def test_scientific_double_spin_box_accepts_exponents(app):
     box.lineEdit().setText("1.4e5")
     box.interpretText()
     assert box.value() == 1.4e5
+    box.setDecimals(12)
+    for value in (0., 100., 1e-9, 1.234567890123, 1000.000000000001):
+        box.setValue(value)
+        assert float(box.text()) == value
+        box.interpretText()
+        assert box.value() == value
+    box.setValue(100.)
+    assert box.text() == "100"
 
 
 def test_import_dialog_applies_shot_guess_and_keeps_fields_editable(app, monkeypatch):

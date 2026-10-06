@@ -28,21 +28,21 @@ def stylesheet(appearance="Light"):
 QLabel#brand { font-size: 24px; font-weight: 700; letter-spacing: 1px; }
 QLabel#subtitle { color: $muted; font-size: 12px; }
 QLabel#sectionTitle { font-size: 19px; font-weight: 600; }
-QGroupBox { border: 1px solid $border; border-radius: 10px; margin-top: 18px; padding: 15px 10px 8px; font-weight: 600; }
+QGroupBox { border: 1px solid $border; border-radius: 8px; margin-top: 14px; padding: 10px 6px 6px; font-weight: 600; }
 QGroupBox::title { subcontrol-origin: margin; left: 12px; top: 2px; color: $muted; }
-QPushButton { background: $button; border: 1px solid $border; border-radius: 6px; padding: 8px 12px; }
+QPushButton { background: $button; border: 1px solid $border; border-radius: 6px; padding: 6px 10px; }
 QPushButton:hover, QToolButton:hover { background: $hover; border-color: $accent; }
 QPushButton:disabled { color: $disabled; background: $inactive; }
 QPushButton#primary { background: $accent; color: $on_accent; font-weight: 700; border: none; }
 QPushButton#primary:disabled { background: $inactive; color: $disabled; }
-QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox { background: $field; border: 1px solid $border; border-radius: 5px; padding: 5px; min-height: 19px; }
+QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox { background: $field; border: 1px solid $border; border-radius: 5px; padding: 4px; min-height: 19px; }
 QComboBox:focus, QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus { border-color: $accent; }
 QComboBox:disabled, QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled { color: $disabled; background: $inactive; }
 QAbstractItemView, QPlainTextEdit, QTextEdit { background: $panel; color: $fg; border: 1px solid $border; border-radius: 5px; selection-background-color: $selection; selection-color: $fg; }
-QListWidget::item { padding: 7px; }
+QListWidget::item { padding: 4px 6px; }
 QAbstractItemView::item:selected { background: $selection; color: $fg; }
 QHeaderView::section { background: $button; color: $fg; padding: 6px; border: none; }
-QTabBar::tab { padding: 9px 18px; background: $inactive; }
+QTabBar::tab { padding: 6px 12px; background: $inactive; }
 QTabBar::tab:selected { color: $accent; border-bottom: 2px solid $accent; }
 QSlider::groove:horizontal { height: 5px; background: $border; border-radius: 2px; }
 QSlider::handle:horizontal { width: 14px; margin: -5px 0; background: $accent; border-radius: 7px; }
@@ -52,6 +52,7 @@ QCheckBox::indicator:checked { background: $accent; border-color: $accent; image
 QStatusBar { color: $muted; border-top: 1px solid $border; }
 QScrollArea, QToolBar { border: none; }
 QToolButton:checked { background: $selection; }
+QToolBar QToolButton { padding: 5px 8px; border-radius: 4px; }
 QToolTip { background: $panel; color: $fg; border: 1px solid $border; padding: 5px; }
 QProgressBar { border: 1px solid $border; border-radius: 4px; text-align: center; }
 QProgressBar::chunk { background: $accent; }

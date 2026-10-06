@@ -7,7 +7,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolb
 from matplotlib.widgets import SpanSelector
 from . import langmuir as analysis, plotting
 from .appearance import FacilityLogo, colors
-from .widgets import ScientificDoubleSpinBox, Worker, combo, spin
+from .widgets import ScientificDoubleSpinBox, Worker, combo, spin, form_layout, numeric_edit
 
 
 class IntervalEditor(W.QWidget):
@@ -16,8 +16,8 @@ class IntervalEditor(W.QWidget):
     def __init__(self, time, interval, parent=None):
         super().__init__(parent)
         self.time = time
-        layout = W.QFormLayout(self)
-        layout.setRowWrapPolicy(W.QFormLayout.WrapLongRows)
+        layout = form_layout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
         self.start, self.stop = ScientificDoubleSpinBox(), ScientificDoubleSpinBox()
         self.first, self.last = spin(0, len(time)-1), spin(0, len(time)-1)
         for box in (self.start, self.stop):
@@ -72,6 +72,7 @@ class TraceView(W.QWidget):
         self.canvas = FigureCanvasQTAgg(self.fig)
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
         layout = W.QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.toolbar)
         layout.addWidget(self.canvas)
         self.axes = [self.fig.add_subplot(211), self.fig.add_subplot(212)]
@@ -179,8 +180,8 @@ class OffsetDialog(W.QDialog):
         layout.addWidget(note)
         self.mode = combo(["None", "Recorded interval", "Constant"])
         self.mode.setCurrentText(settings.offset_mode)
-        self.constant = W.QLineEdit(str(settings.offset_volts))
-        form = W.QFormLayout()
+        self.constant = numeric_edit(str(settings.offset_volts))
+        form = form_layout()
         form.addRow("Correction", self.mode)
         form.addRow("Constant (digitizer V)", self.constant)
         layout.addLayout(form)
@@ -249,12 +250,11 @@ class LangmuirDialog(W.QDialog):
         layout.addWidget(split, 1)
         scroll = W.QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setMinimumWidth(400)
+        scroll.setMinimumWidth(330)
         scroll.setMaximumWidth(470)
         scroll.setHorizontalScrollBarPolicy(C.Qt.ScrollBarAlwaysOff)
         panel = W.QWidget()
-        self.form = W.QFormLayout(panel)
-        self.form.setRowWrapPolicy(W.QFormLayout.WrapLongRows)
+        self.form = form_layout(panel)
         scroll.setWidget(panel)
         split.addWidget(scroll)
         self.voltage = combo([""] + list(data.channels))
@@ -278,7 +278,7 @@ class LangmuirDialog(W.QDialog):
         self.fields = {}
         for key, label in [("voltage_factor", "V attenuation multiplier"), ("current_factor", "I attenuation multiplier"),
                            ("resistance", "Measurement resistor (Ω)"), ("area_mm2", "Collection area (mm²)")]:
-            widget = W.QLineEdit(str(getattr(settings, key)))
+            widget = numeric_edit(str(getattr(settings, key)))
             self.fields[key] = widget
             self.form.addRow(label, widget)
             widget.editingFinished.connect(self.settings_changed)
@@ -299,8 +299,7 @@ class LangmuirDialog(W.QDialog):
         self.form.addRow(W.QLabel("SWEEP INTERVAL · drag across either trace"))
         self.form.addRow(self.editor)
         fit = W.QGroupBox("Physical / fitting settings")
-        fitform = W.QFormLayout(fit)
-        fitform.setRowWrapPolicy(W.QFormLayout.WrapLongRows)
+        fitform = form_layout(fit)
         self.fit_fields = {}
         labels = {"voltage_bin_width": "Voltage bin width (V)", "vp_smoothing_width_V": "Vp smoothing width (V)",
                   "te_min_eV": "Minimum Te (eV)", "te_max_eV": "Maximum Te (eV)",
@@ -308,7 +307,7 @@ class LangmuirDialog(W.QDialog):
                   "te_current_floor_frac": "Electron current floor fraction", "te_min_points": "Minimum fit points",
                   "ion_min_snr": "Minimum ion-current SNR"}
         for key, label in labels.items():
-            widget = W.QLineEdit(str(settings.fit[key]))
+            widget = numeric_edit(str(settings.fit[key]))
             self.fit_fields[key] = widget
             fitform.addRow(label, widget)
             widget.editingFinished.connect(self.settings_changed)
@@ -325,6 +324,8 @@ class LangmuirDialog(W.QDialog):
         self.form.addRow(fit)
         self.tabs = W.QTabWidget()
         split.addWidget(self.tabs)
+        split.setStretchFactor(1, 1)
+        split.setSizes([410, 940])
         self.trace_view = TraceView(data.coords["time"], appearance)
         self.tabs.addTab(self.trace_view, "Representative traces")
         result_panel = W.QWidget()
@@ -341,6 +342,8 @@ class LangmuirDialog(W.QDialog):
         self.results = W.QPlainTextEdit()
         self.results.setReadOnly(True)
         self.results.setMaximumHeight(125)
+        self.results.setVisible(False)
+        self.results.textChanged.connect(lambda: self.results.setVisible(bool(self.results.toPlainText())))
         layout.addWidget(self.results)
         self.message = W.QLabel()
         self.message.setWordWrap(True)

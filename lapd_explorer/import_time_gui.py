@@ -6,7 +6,7 @@ from matplotlib.widgets import SpanSelector
 from . import io, plotting
 from .appearance import colors
 from .temporal import sample_slice, preview_record
-from .widgets import Worker, ScientificDoubleSpinBox, combo, spin
+from .widgets import Worker, ScientificDoubleSpinBox, combo, spin, form_layout, numeric_edit
 
 
 class ImportTimeDialog(W.QDialog):
@@ -33,30 +33,35 @@ class ImportTimeDialog(W.QDialog):
         split = W.QSplitter()
         layout.addWidget(split, 1)
         controls = W.QWidget()
-        form = W.QFormLayout(controls)
+        form = form_layout(controls)
         self.form = form
-        form.setRowWrapPolicy(W.QFormLayout.WrapAllRows)
         self.first, self.last = spin(0, 2**31-1), spin(0, 2**31-1)
         self.start, self.stop = ScientificDoubleSpinBox(), ScientificDoubleSpinBox()
         for box in (self.start, self.stop):
             box.setDecimals(12)
             box.setRange(-1e15, 1e15)
-        form.addRow("First original sample (0-based)", self.first)
-        form.addRow("Last original sample (inclusive)", self.last)
-        form.addRow("Start time (s, inclusive)", self.start)
-        form.addRow("End time (s, inclusive)", self.stop)
+        self.first.setToolTip("First original sample index, inclusive and zero-based.")
+        self.last.setToolTip("Last original sample index, inclusive and zero-based.")
+        self.start.setToolTip("Inclusive start time in seconds.")
+        self.stop.setToolTip("Inclusive end time in seconds.")
+        form.addRow("First sample", self.first)
+        form.addRow("Last sample", self.last)
+        form.addRow("Start time (s)", self.start)
+        form.addRow("End time (s)", self.stop)
         self.mode = combo(["Record index", "Global shot number", "Nearest spatial coordinate"])
         self.index = spin(0, 2**31-1)
-        self.shot = W.QLineEdit()
-        self.coordinates = [W.QLineEdit() for _ in range(3)]
+        self.shot = numeric_edit()
+        self.coordinates = [numeric_edit() for _ in range(3)]
         self.repeat = spin(0, 2**31-1)
-        form.addRow("Preview record selector", self.mode)
-        form.addRow("Original record index", self.index)
+        form.addRow("Select record by", self.mode)
+        form.addRow("Record index", self.index)
         form.addRow("Global shot number", self.shot)
         for axis, box in zip("xyz", self.coordinates):
             box.setPlaceholderText("Ignore this coordinate")
-            form.addRow(f"Nearest {axis} (motion units)", box)
-        form.addRow("Occurrence at coordinate (0-based)", self.repeat)
+            box.setToolTip(f"Nearest {axis} coordinate, in the motion control's units.")
+            form.addRow(f"Nearest {axis}", box)
+        self.repeat.setToolTip("Zero-based occurrence at the selected coordinate, in acquisition order.")
+        form.addRow("Occurrence", self.repeat)
         self.reload_button = W.QPushButton("Load selected trace")
         self.reload_button.clicked.connect(self.request_preview)
         form.addRow(self.reload_button)
@@ -69,6 +74,7 @@ class ImportTimeDialog(W.QDialog):
         split.addWidget(scroll)
         plot = W.QWidget()
         plot_layout = W.QVBoxLayout(plot)
+        plot_layout.setContentsMargins(0, 0, 0, 0)
         self.fig = plotting.figure(appearance)
         self.canvas = FigureCanvasQTAgg(self.fig)
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
@@ -83,7 +89,8 @@ class ImportTimeDialog(W.QDialog):
                                      props=dict(facecolor=theme["accent"], alpha=.25),
                                      interactive=True, drag_from_anywhere=True)
         split.addWidget(plot)
-        split.setSizes([310, 790])
+        split.setStretchFactor(1, 1)
+        split.setSizes([260, 840])
         self.message = W.QLabel()
         self.message.setWordWrap(True)
         layout.addWidget(self.message)

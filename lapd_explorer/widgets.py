@@ -21,14 +21,51 @@ class Worker(C.QThread):
 
 def combo(items):
     widget = W.QComboBox()
+    # Long channel/configuration names should not determine the panel width.
+    # The popup still shows the complete choices.
+    widget.setSizeAdjustPolicy(W.QComboBox.AdjustToMinimumContentsLengthWithIcon)
+    widget.setMinimumContentsLength(10)
+    widget.setSizePolicy(W.QSizePolicy.Expanding, W.QSizePolicy.Fixed)
     widget.addItems(items)
     return widget
+
+
+def form_layout(parent=None):
+    """Compact forms that keep labels beside fields when there is room."""
+    layout = W.QFormLayout(parent)
+    layout.setRowWrapPolicy(W.QFormLayout.WrapLongRows)
+    layout.setFieldGrowthPolicy(W.QFormLayout.ExpandingFieldsGrow)
+    layout.setFormAlignment(C.Qt.AlignTop)
+    margin = 6 if parent is not None else 0
+    layout.setContentsMargins(margin, margin, margin, margin)
+    layout.setHorizontalSpacing(8)
+    layout.setVerticalSpacing(4)
+    return layout
+
+
+def add_list_field(form, label, widget):
+    """Give a scrollable selector the full form width, below its label."""
+    heading = W.QLabel(label)
+    heading.setSizePolicy(W.QSizePolicy.Preferred, W.QSizePolicy.Fixed)
+    form.addRow(heading)
+    form.addRow(widget)
+    widget.setMinimumHeight(110)
+    widget.setMaximumHeight(170)
+    widget.setHorizontalScrollMode(W.QAbstractItemView.ScrollPerPixel)
 
 
 def spin(minimum=0, maximum=999999, value=0):
     widget = W.QSpinBox()
     widget.setRange(minimum, maximum)
     widget.setValue(value)
+    return widget
+
+
+def numeric_edit(text=""):
+    """Numeric entries need a modest width, even inside a wide form."""
+    widget = W.QLineEdit(text)
+    widget.setSizePolicy(W.QSizePolicy.Maximum, W.QSizePolicy.Fixed)
+    widget.setMaximumWidth(150)
     return widget
 
 
@@ -40,7 +77,22 @@ class ScientificDoubleSpinBox(W.QDoubleSpinBox):
         # Other numeric inputs use Python's locale-independent float parser, so
         # keep the decimal point and exponent syntax consistent across the GUI.
         self.setLocale(C.QLocale.c())
+        self.setSizePolicy(W.QSizePolicy.Maximum, W.QSizePolicy.Fixed)
         self.setToolTip("Decimal or scientific notation is accepted (for example, 1.4e5).")
+
+    def textFromValue(self, value):
+        # Python's shortest round-trip representation removes padding without
+        # rounding away a sample boundary when Qt reinterprets an unchanged edit.
+        text = repr(float(value))
+        return text[:-2] if text.endswith(".0") else text
+
+    def sizeHint(self):
+        size = super().sizeHint()
+        size.setWidth(self.fontMetrics().horizontalAdvance("-0.123456789012") + 32)
+        return size
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
 
     def validate(self, text, position):
         validator = G.QDoubleValidator(
@@ -84,20 +136,22 @@ class ImportDialog(W.QDialog):
         hint.setWordWrap(True)
         layout.addWidget(hint)
         self.tabs = W.QTabWidget()
+        self.tabs.setSizePolicy(W.QSizePolicy.Expanding, W.QSizePolicy.Maximum)
         layout.addWidget(self.tabs)
         mapped = W.QWidget()
-        form = W.QFormLayout(mapped)
-        form.setRowWrapPolicy(W.QFormLayout.WrapLongRows)
+        form = form_layout(mapped)
+        self.motion_form = form
         self.channels = W.QListWidget()
         self.channels.setSelectionMode(W.QAbstractItemView.ExtendedSelection)
         for spec in info["channels"]:
-            item = W.QListWidgetItem(f"{spec['digitizer']} / {spec['config_name']} / {spec['adc']}  •  B{spec['board']} Ch{spec['channel']}")
+            item = W.QListWidgetItem(f"B{spec['board']} Ch{spec['channel']}  •  {spec['digitizer']} / {spec['config_name']} / {spec['adc']}")
             item.setData(C.Qt.UserRole, spec)
+            item.setToolTip(item.text())
             self.channels.addItem(item)
         if self.channels.count():
             self.channels.item(0).setSelected(True)
-        form.addRow("Digitizer channels", self.channels)
-        self.motion = W.QComboBox()
+        add_list_field(form, "Digitizer channels", self.channels)
+        self.motion = combo([])
         self.motion.addItem("None — manual spatial dimensions", None)
         for ctrl in info["controls"]:
             self.motion.addItem(f"{ctrl[0]} / {ctrl[1]}", ctrl)
@@ -111,58 +165,66 @@ class ImportDialog(W.QDialog):
         self.position_source = combo(["Target if available", "Measured positions"])
         form.addRow("Position coordinates", self.position_source)
         self.cases, self.repeats = spin(1, value=1), spin(1, value=1)
-        form.addRow("Number of cases", self.cases)
-        form.addRow("Number of shots per case", self.repeats)
+        form.addRow("Cases", self.cases)
+        form.addRow("Shots per case", self.repeats)
         self.order = combo(["case,shot", "shot,case"])
-        form.addRow("Per-position order (fastest last)", self.order)
+        self.order.setToolTip("Per-position acquisition order; the last listed dimension varies fastest.")
+        form.addRow("Per-position order", self.order)
         self.precision = spin(0, 8, 4)
-        form.addRow("Motion coordinate decimals", self.precision)
+        form.addRow("Coordinate decimals", self.precision)
         self.start, self.stop = spin(), spin()
-        form.addRow("First record index (inclusive)", self.start)
-        form.addRow("Stop record index (exclusive; 0 = end)", self.stop)
+        self.start.setToolTip("First original record index, inclusive and zero-based.")
+        self.stop.setToolTip("Stop original record index, exclusive; 0 reads to the end.")
+        form.addRow("First record (inclusive)", self.start)
+        form.addRow("Stop record (0 = end)", self.stop)
         self.tabs.addTab(mapped, "BaPSF / bapsflib")
         raw = W.QWidget()
-        rawform = W.QFormLayout(raw)
-        rawform.setRowWrapPolicy(W.QFormLayout.WrapLongRows)
+        rawform = form_layout(raw)
         self.raw_paths = W.QListWidget()
         self.raw_paths.setSelectionMode(W.QAbstractItemView.ExtendedSelection)
         for path_, shape in info["datasets"]:
             item = W.QListWidgetItem(f"/{path_}  {shape}")
             item.setData(C.Qt.UserRole, path_)
+            item.setToolTip(item.text())
             self.raw_paths.addItem(item)
-        rawform.addRow("Numeric HDF5 datasets", self.raw_paths)
-        self.dt = W.QLineEdit("1e-6")
+        add_list_field(rawform, "Numeric HDF5 datasets", self.raw_paths)
+        self.dt = numeric_edit("1e-6")
         rawform.addRow("Sample interval (s)", self.dt)
         self.raw_units = W.QLineEdit("V")
         rawform.addRow("Signal units", self.raw_units)
-        rawform.addRow(W.QLabel("Raw import uses manual dimensions; values are read without ADC calibration."))
+        raw_note = W.QLabel("Raw import uses manual dimensions; values are read without ADC calibration.")
+        raw_note.setWordWrap(True)
+        rawform.addRow(raw_note)
         self.tabs.addTab(raw, "Raw HDF5")
         if not info["channels"]:
             self.tabs.setCurrentIndex(1)
-        self.t0 = W.QLineEdit("0")
-        timeform = W.QFormLayout()
-        timeform.addRow("Time origin (s; user-defined)", self.t0)
+        self.t0 = numeric_edit("0")
+        timeform = form_layout()
+        self.t0.setToolTip("User-defined time origin in seconds.")
+        timeform.addRow("Time origin (s)", self.t0)
         self.space_units = W.QLineEdit("cm")
-        timeform.addRow("Spatial units (raw/manual coordinates)", self.space_units)
-        timeform.setRowWrapPolicy(W.QFormLayout.WrapLongRows)
+        self.space_units.setToolTip("Spatial units for raw/manual coordinates.")
+        timeform.addRow("Spatial units", self.space_units)
         time_layout.addLayout(timeform)
         temporal = W.QGroupBox("Read fewer temporal samples")
-        temporal_form = W.QFormLayout(temporal)
-        temporal_form.setRowWrapPolicy(W.QFormLayout.WrapAllRows)
+        temporal_form = form_layout(temporal)
         self.time_range_mode = combo(["All samples", "Sample limits", "Time limits (s)"])
-        self.time_first, self.time_last = W.QLineEdit("0"), W.QLineEdit()
+        self.time_first, self.time_last = numeric_edit("0"), numeric_edit()
         self.time_last.setPlaceholderText("End of recording")
         self.time_first.setEnabled(False)
         self.time_last.setEnabled(False)
         self.decimation = spin(1, 2**24, 1)
         temporal_form.addRow("Temporal range", self.time_range_mode)
-        temporal_form.addRow("First sample / start time (inclusive)", self.time_first)
-        temporal_form.addRow("Last sample / end time (inclusive)", self.time_last)
-        temporal_form.addRow("Keep every Nth sample (1 = all)", self.decimation)
+        self.time_first.setToolTip("First original sample index or start time in seconds, inclusive.")
+        self.time_last.setToolTip("Last original sample index or end time in seconds, inclusive; blank reads to the end.")
+        self.decimation.setToolTip("Keep every Nth original sample; 1 keeps all samples.")
+        temporal_form.addRow("First sample / time", self.time_first)
+        temporal_form.addRow("Last sample / time", self.time_last)
+        temporal_form.addRow("Keep every Nth sample", self.decimation)
         self.preview_button = W.QPushButton("Preview one trace / choose limits…")
         self.preview_button.clicked.connect(self.preview_time)
         temporal_form.addRow(self.preview_button)
-        self.time_summary = W.QLabel("Limits refer to original samples. The imported sampling rate is divided by N.")
+        self.time_summary = W.QLabel("Limits are inclusive and refer to original samples. The imported rate is divided by N.")
         self.time_summary.setWordWrap(True)
         temporal_form.addRow(self.time_summary)
         self.alias_note = W.QLabel("No anti-alias filtering: frequencies above the reduced Nyquist limit can alias.")
@@ -180,23 +242,30 @@ class ImportDialog(W.QDialog):
         self.dt.editingFinished.connect(self.invalidate_time_summary)
         time_layout.addWidget(temporal)
         time_layout.addStretch()
-        layout.addWidget(W.QLabel("Manual dimensions • slowest → fastest; omit shot for one stored trace"))
+        self.manual_panel = W.QWidget()
+        manual_layout = W.QVBoxLayout(self.manual_panel)
+        manual_layout.setContentsMargins(0, 0, 0, 0)
+        manual_hint = W.QLabel("Manual dimensions • slowest → fastest; omit shot for one stored trace")
+        manual_hint.setWordWrap(True)
+        manual_layout.addWidget(manual_hint)
         self.axes = W.QTableWidget(0, 4)
         self.axes.setHorizontalHeaderLabels(["Axis", "Size", "Start", "End"])
         self.axes.horizontalHeader().setSectionResizeMode(W.QHeaderView.Stretch)
-        self.axes.setMaximumHeight(150)
-        layout.addWidget(self.axes)
+        self.axes.setVisible(False)
+        manual_layout.addWidget(self.axes)
         row = W.QHBoxLayout()
         add, remove = W.QPushButton("+ Axis"), W.QPushButton("Remove axis")
         add.clicked.connect(self.add_axis)
-        remove.clicked.connect(lambda: self.axes.removeRow(self.axes.currentRow() if self.axes.currentRow() >= 0 else self.axes.rowCount()-1))
+        remove.clicked.connect(self.remove_axis)
         row.addWidget(add)
         row.addWidget(remove)
         row.addStretch()
-        layout.addLayout(row)
+        manual_layout.addLayout(row)
+        layout.addWidget(self.manual_panel)
         self.message = W.QLabel("A point with one stored trace needs no manual axes. Dimension sizes must multiply to the record count.")
         self.message.setWordWrap(True)
         layout.addWidget(self.message)
+        layout.addStretch()
         buttons = W.QDialogButtonBox(W.QDialogButtonBox.Cancel)
         self.load = buttons.addButton("Load acquisition", W.QDialogButtonBox.AcceptRole)
         self.load.clicked.connect(self.begin)
@@ -210,7 +279,7 @@ class ImportDialog(W.QDialog):
         split = W.QSplitter()
         split.addWidget(scroll)
         split.addWidget(time_scroll)
-        split.setSizes([570, 450])
+        split.setSizes([660, 340])
         outer_layout.addWidget(split, 1)
         outer_layout.addWidget(buttons)
         self.guess_timer = C.QTimer(self)
@@ -224,7 +293,16 @@ class ImportDialog(W.QDialog):
         self.precision.valueChanged.connect(self.request_guess)
         self.start.valueChanged.connect(self.request_guess)
         self.stop.valueChanged.connect(self.request_guess)
+        self.mapping.currentIndexChanged.connect(self.update_mapping_fields)
+        self.tabs.currentChanged.connect(self.update_mapping_fields)
+        self.update_mapping_fields()
         C.QTimer.singleShot(0, self.request_guess)
+
+    def update_mapping_fields(self):
+        manual = self.tabs.currentIndex() == 1 or self.mapping.currentIndex() == 1
+        self.manual_panel.setVisible(manual)
+        for field in (self.position_source, self.cases, self.repeats, self.order, self.precision):
+            self.motion_form.setRowVisible(field, not manual)
 
     def time_mode_changed(self):
         enabled = self.time_range_mode.currentIndex() != 0
@@ -236,7 +314,7 @@ class ImportDialog(W.QDialog):
 
     def invalidate_time_summary(self):
         self.temporal_metadata = None
-        self.time_summary.setText("Limits refer to original samples. Preview a trace to see the effective rate and retained sample count.")
+        self.time_summary.setText("Limits are inclusive and refer to original samples. Preview a trace to see the effective rate and retained sample count.")
 
     def temporal_options(self):
         options = dict(decimation=self.decimation.value())
@@ -384,6 +462,17 @@ class ImportDialog(W.QDialog):
         self.axes.setCellWidget(row, 0, combo(["x", "y", "z", "case", "shot"]))
         for col, value in enumerate(["1", "0", "0"], start=1):
             self.axes.setItem(row, col, W.QTableWidgetItem(value))
+        self.update_axes_height()
+
+    def remove_axis(self):
+        row = self.axes.currentRow()
+        self.axes.removeRow(row if row >= 0 else self.axes.rowCount()-1)
+        self.update_axes_height()
+
+    def update_axes_height(self):
+        self.axes.setVisible(self.axes.rowCount() > 0)
+        height = self.axes.horizontalHeader().height() + sum(self.axes.rowHeight(r) for r in range(self.axes.rowCount()))
+        self.axes.setFixedHeight(height + 2*self.axes.frameWidth())
 
     def begin(self):
         try:
@@ -466,8 +555,8 @@ class SliceAxisControls(W.QGroupBox):
         layout = W.QVBoxLayout(self)
         self.mode = combo(list(self.MODES))
         layout.addWidget(self.mode)
-        form = W.QFormLayout()
-        self.minimum, self.maximum = W.QLineEdit("-1"), W.QLineEdit("1")
+        form = form_layout()
+        self.minimum, self.maximum = numeric_edit("-1"), numeric_edit("1")
         form.addRow("Min", self.minimum)
         form.addRow("Max", self.maximum)
         layout.addLayout(form)
@@ -559,13 +648,13 @@ class SpatialAveragingDialog(W.QDialog):
         note = W.QLabel("Applied to each channel's 2D plane after other preprocessing, separately at every time, case and remaining shot. Sizes are grid points, not physical distances; on irregular grids the physical width varies.")
         note.setWordWrap(True)
         layout.addWidget(note)
-        self.form = W.QFormLayout()
+        self.form = form_layout()
         layout.addLayout(self.form)
         self.method = combo(list(self.METHODS))
         self.method.setCurrentIndex(list(self.METHODS.values()).index(settings["method"]))
         self.form.addRow("Method", self.method)
         self.windows = [spin(1, 101, v) for v in settings["window_size"]]
-        self.sigmas = [W.QLineEdit(str(v)) for v in settings["sigma"]]
+        self.sigmas = [numeric_edit(str(v)) for v in settings["sigma"]]
         for dim, window, sigma in zip(spatial_dims, self.windows, self.sigmas):
             window.setSingleStep(2)
             self.form.addRow(f"{dim} window (odd grid points)", window)
@@ -638,7 +727,7 @@ class SmoothingDialog(W.QDialog):
         note = W.QLabel("Applied after optional integration, independently to each channel, position, case and shot. Windows and σ are in samples.")
         note.setWordWrap(True)
         layout.addWidget(note)
-        self.form = W.QFormLayout()
+        self.form = form_layout()
         layout.addLayout(self.form)
         self.method = combo(list(self.METHODS))
         self.method.setCurrentIndex(list(self.METHODS.values()).index(settings["method"]))
@@ -646,10 +735,10 @@ class SmoothingDialog(W.QDialog):
         self.fields = {
             "window_size": spin(1, 1000000, settings["window_size"]),
             "polyorder": spin(0, 100, settings["polyorder"]),
-            "sigma": W.QLineEdit(str(settings["sigma"])),
+            "sigma": numeric_edit(str(settings["sigma"])),
             "butter_type": combo(list(self.BUTTER_TYPES)),
-            "cutoff": W.QLineEdit(str(settings["cutoff"])),
-            "cutoff_upper": W.QLineEdit(str(settings.get("cutoff_upper", 10000.0))),
+            "cutoff": numeric_edit(str(settings["cutoff"])),
+            "cutoff_upper": numeric_edit(str(settings.get("cutoff_upper", 10000.0))),
             "butter_order": spin(1, 20, settings["butter_order"]),
             "mode": combo(["nearest", "reflect", "mirror", "constant", "wrap"]),
             "nan_policy": combo(["propagate", "interp"]),
