@@ -170,12 +170,53 @@ controls through `bapsflib`. Multiple channels must have compatible record and
 time axes. Use Command-click on macOS or Ctrl-click on Windows/Linux to select
 several channels.
 
+### Read fewer temporal samples
+
+Before loading, use **Read fewer temporal samples** for either BaPSF or raw
+HDF5 data:
+
+- Choose **Sample limits** for zero-based, inclusive original sample indices,
+  or **Time limits (s)** for inclusive times relative to the entered time origin.
+  Leave the final bound blank for the end of the recording. **All samples**
+  retains the complete time range.
+- Set **Keep every Nth sample** to an integer factor; one keeps all samples.
+  The importer reads only those samples from HDF5 and adjusts the imported time
+  spacing and effective sampling rate. For example, keeping every tenth sample
+  of a 100 MHz acquisition gives a 10 MHz imported rate and 5 MHz Nyquist limit.
+  Thinning does not apply an anti-alias filter; higher-frequency signals can
+  alias. Crop and thinning may be combined. Thinning starts at the chosen first
+  sample; the last retained sample may precede the inclusive end limit.
+- Choose **Preview one trace / choose limits…** to open a zoom/pan toolbar and
+  draggable interval. The initial trace comes from the middle of the selected
+  record range. Choose another selected channel, original record index, global
+  shot number, or nearest motion coordinate. At a coordinate, an occurrence
+  index chooses among repeated records in acquisition order. Blank coordinates
+  are ignored; global shots and positions require BaPSF metadata.
+- Refine the first/last sample indices or start/end times manually in the
+  preview. The entries stay synchronized with the plot. **Use these limits**
+  copies the final original indices into the importer, where they may still be
+  edited. Zooming reloads only the visible interval; the display contains at
+  most 20,000 points from one trace. Display thinning can hide short features,
+  so zoom in to inspect them.
+
+After previewing, the importer shows the original and effective rates, Nyquist
+limit, and retained samples per trace. Signal-array memory scales approximately
+with that retained fraction. Reads use bounded record batches; motion mapping
+and later processing can still require additional arrays. Original sample
+bounds, thinning factor, and effective rate are saved in the imported metadata.
+These controls apply to acquisitions and raw HDF5 imports; opening a saved
+processed explorer dataset continues to restore that saved dataset directly.
+
 ### Motion mapping
 
 Motion grouping requires a complete rectangular grid with the same number of
-records at every position. When a channel is selected, the importer samples the
-records, assumes one case, and fills **Number of shots per case** from repeated
-positions. Replace that guess when the acquisition contains multiple cases.
+records at every position. When a channel is selected, the importer checks the
+row count of one channel dataset and uses shot-number and motion metadata to
+fill **Number of shots per case**, assuming one case. Automatic estimation reads
+no signal samples; an explicitly requested preview reads only one trace.
+Without motion mapping, the selected row count is the
+shot estimate for a single point. Replace that guess when the acquisition
+contains multiple cases.
 
 Within each position, acquisition order is interpreted as either `case, shot`
 (shot fastest) or `shot, case` (case fastest). Cases cannot be inferred reliably

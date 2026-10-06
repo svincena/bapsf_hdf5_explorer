@@ -61,8 +61,10 @@ class ImportDialog(W.QDialog):
         self.path, self.info, self.dataset, self.worker = path, info, None, None
         self.guess_worker = None
         self.guess_pending = False
+        self.preview_worker = None
+        self.temporal_metadata = None
         self.setWindowTitle("Import acquisition")
-        self.resize(780, 760)
+        self.resize(1020, 780)
         layout = W.QVBoxLayout(self)
         header = W.QHBoxLayout()
         title = W.QLabel("Map your acquisition")
@@ -73,6 +75,11 @@ class ImportDialog(W.QDialog):
         self.facility_logo = FacilityLogo(appearance, height=46)
         header.addWidget(self.facility_logo)
         layout.addLayout(header)
+        outer_layout = layout
+        content = W.QWidget()
+        layout = W.QVBoxLayout(content)
+        time_panel = W.QWidget()
+        time_layout = W.QVBoxLayout(time_panel)
         hint = W.QLabel("Select 1–3 channels, then describe the stored records. Time must be the last raw axis.")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -80,6 +87,7 @@ class ImportDialog(W.QDialog):
         layout.addWidget(self.tabs)
         mapped = W.QWidget()
         form = W.QFormLayout(mapped)
+        form.setRowWrapPolicy(W.QFormLayout.WrapLongRows)
         self.channels = W.QListWidget()
         self.channels.setSelectionMode(W.QAbstractItemView.ExtendedSelection)
         for spec in info["channels"]:
@@ -115,6 +123,7 @@ class ImportDialog(W.QDialog):
         self.tabs.addTab(mapped, "BaPSF / bapsflib")
         raw = W.QWidget()
         rawform = W.QFormLayout(raw)
+        rawform.setRowWrapPolicy(W.QFormLayout.WrapLongRows)
         self.raw_paths = W.QListWidget()
         self.raw_paths.setSelectionMode(W.QAbstractItemView.ExtendedSelection)
         for path_, shape in info["datasets"]:
@@ -135,7 +144,42 @@ class ImportDialog(W.QDialog):
         timeform.addRow("Time origin (s; user-defined)", self.t0)
         self.space_units = W.QLineEdit("cm")
         timeform.addRow("Spatial units (raw/manual coordinates)", self.space_units)
-        layout.addLayout(timeform)
+        timeform.setRowWrapPolicy(W.QFormLayout.WrapLongRows)
+        time_layout.addLayout(timeform)
+        temporal = W.QGroupBox("Read fewer temporal samples")
+        temporal_form = W.QFormLayout(temporal)
+        temporal_form.setRowWrapPolicy(W.QFormLayout.WrapAllRows)
+        self.time_range_mode = combo(["All samples", "Sample limits", "Time limits (s)"])
+        self.time_first, self.time_last = W.QLineEdit("0"), W.QLineEdit()
+        self.time_last.setPlaceholderText("End of recording")
+        self.time_first.setEnabled(False)
+        self.time_last.setEnabled(False)
+        self.decimation = spin(1, 2**24, 1)
+        temporal_form.addRow("Temporal range", self.time_range_mode)
+        temporal_form.addRow("First sample / start time (inclusive)", self.time_first)
+        temporal_form.addRow("Last sample / end time (inclusive)", self.time_last)
+        temporal_form.addRow("Keep every Nth sample (1 = all)", self.decimation)
+        self.preview_button = W.QPushButton("Preview one trace / choose limits…")
+        self.preview_button.clicked.connect(self.preview_time)
+        temporal_form.addRow(self.preview_button)
+        self.time_summary = W.QLabel("Limits refer to original samples. The imported sampling rate is divided by N.")
+        self.time_summary.setWordWrap(True)
+        temporal_form.addRow(self.time_summary)
+        self.alias_note = W.QLabel("No anti-alias filtering: frequencies above the reduced Nyquist limit can alias.")
+        self.alias_note.setWordWrap(True)
+        self.alias_note.setVisible(False)
+        temporal_form.addRow(self.alias_note)
+        self.time_range_mode.currentIndexChanged.connect(self.time_mode_changed)
+        self.decimation.valueChanged.connect(self.update_time_summary)
+        self.time_first.editingFinished.connect(self.update_time_summary)
+        self.time_last.editingFinished.connect(self.update_time_summary)
+        self.t0.editingFinished.connect(self.update_time_summary)
+        self.channels.itemSelectionChanged.connect(self.invalidate_time_summary)
+        self.raw_paths.itemSelectionChanged.connect(self.invalidate_time_summary)
+        self.tabs.currentChanged.connect(self.invalidate_time_summary)
+        self.dt.editingFinished.connect(self.invalidate_time_summary)
+        time_layout.addWidget(temporal)
+        time_layout.addStretch()
         layout.addWidget(W.QLabel("Manual dimensions • slowest → fastest; omit shot for one stored trace"))
         self.axes = W.QTableWidget(0, 4)
         self.axes.setHorizontalHeaderLabels(["Axis", "Size", "Start", "End"])
@@ -157,7 +201,18 @@ class ImportDialog(W.QDialog):
         self.load = buttons.addButton("Load acquisition", W.QDialogButtonBox.AcceptRole)
         self.load.clicked.connect(self.begin)
         buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        scroll = W.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(content)
+        time_scroll = W.QScrollArea()
+        time_scroll.setWidgetResizable(True)
+        time_scroll.setWidget(time_panel)
+        split = W.QSplitter()
+        split.addWidget(scroll)
+        split.addWidget(time_scroll)
+        split.setSizes([570, 450])
+        outer_layout.addWidget(split, 1)
+        outer_layout.addWidget(buttons)
         self.guess_timer = C.QTimer(self)
         self.guess_timer.setSingleShot(True)
         self.guess_timer.setInterval(200)
@@ -171,9 +226,103 @@ class ImportDialog(W.QDialog):
         self.stop.valueChanged.connect(self.request_guess)
         C.QTimer.singleShot(0, self.request_guess)
 
+    def time_mode_changed(self):
+        enabled = self.time_range_mode.currentIndex() != 0
+        self.time_first.setEnabled(enabled)
+        self.time_last.setEnabled(enabled)
+        self.time_first.setText("0" if self.time_range_mode.currentIndex() != 2 else self.t0.text())
+        self.time_last.clear()
+        self.update_time_summary()
+
+    def invalidate_time_summary(self):
+        self.temporal_metadata = None
+        self.time_summary.setText("Limits refer to original samples. Preview a trace to see the effective rate and retained sample count.")
+
+    def temporal_options(self):
+        options = dict(decimation=self.decimation.value())
+        mode = self.time_range_mode.currentIndex()
+        if mode:
+            cast = int if mode == 1 else float
+            first = cast(self.time_first.text())
+            last = cast(self.time_last.text()) if self.time_last.text().strip() else None
+            options["sample_limits" if mode == 1 else "time_limits"] = (first, last)
+        return options
+
+    def update_time_summary(self):
+        self.alias_note.setVisible(self.decimation.value() > 1)
+        if self.temporal_metadata is None:
+            return
+        try:
+            from .temporal import sample_slice
+            meta = self.temporal_metadata
+            selection = sample_slice(meta["samples"], meta["dt"], float(self.t0.text()), **self.temporal_options())
+            count = len(range(selection.start, selection.stop, selection.step))
+            rate = 1 / (meta["dt"] * selection.step)
+            self.time_summary.setText(f"Original rate: {1/meta['dt']:g} Hz · Imported rate: {rate:g} Hz · "
+                                      f"Nyquist: {rate/2:g} Hz\nRetain {count:,} / {meta['samples']:,} samples per trace "
+                                      f"({count/meta['samples']:.1%} of full temporal storage).")
+        except (ValueError, TypeError) as exc:
+            self.time_summary.setText(str(exc))
+
+    def preview_time(self):
+        try:
+            if self.preview_worker and self.preview_worker.isRunning():
+                return
+            sources = []
+            if self.tabs.currentIndex() == 0:
+                for item in self.channels.selectedItems():
+                    sources.append((item.text(), item.data(C.Qt.UserRole), None))
+                control = self.motion.currentData() if self.mapping.currentIndex() == 0 else None
+                kwargs = dict(control=control, start=self.start.value(), stop=self.stop.value() or None,
+                              position_source="target" if self.position_source.currentIndex() == 0 else "measured",
+                              decimals=self.precision.value())
+            else:
+                for item in self.raw_paths.selectedItems():
+                    sources.append((item.text(), None, item.data(C.Qt.UserRole)))
+                kwargs = dict(dt=float(self.dt.text()))
+            if not sources:
+                raise ValueError("Select a channel or dataset to preview.")
+            t0, options = float(self.t0.text()), self.temporal_options()
+            self.guess_timer.stop()
+            self.preview_button.setEnabled(False)
+            self.load.setEnabled(False)
+            self.message.setText("Reading time and record metadata for one preview channel…")
+            def ready(metadata):
+                self.preview_worker.wait()
+                try:
+                    self.temporal_metadata = metadata
+                    self.update_time_summary()
+                    from .import_time_gui import ImportTimeDialog
+                    appearance = self.parent().appearance.currentText() if self.parent() is not None and hasattr(self.parent(), "appearance") else "Light"
+                    dialog = ImportTimeDialog(self.path, sources, kwargs, metadata, t0, options, appearance, self)
+                    if dialog.exec() == W.QDialog.Accepted:
+                        first, last = dialog.sample_limits()
+                        self.temporal_metadata = dialog.metadata
+                        self.time_range_mode.setCurrentIndex(1)
+                        self.time_first.setText(str(first))
+                        self.time_last.setText(str(last))
+                        self.update_time_summary()
+                    self.message.setText("Review the temporal settings before loading the acquisition.")
+                except Exception as exc:
+                    self.message.setText(str(exc))
+                finally:
+                    self.preview_button.setEnabled(True)
+                    self.load.setEnabled(True)
+            def failed(message):
+                self.preview_button.setEnabled(True)
+                self.load.setEnabled(True)
+                self.message.setText(message)
+            self.preview_worker = Worker(lambda: io.import_metadata(self.path, spec=sources[0][1],
+                                         dataset_path=sources[0][2], **kwargs), self)
+            self.preview_worker.result.connect(ready)
+            self.preview_worker.failed.connect(failed)
+            self.preview_worker.start()
+        except Exception as exc:
+            self.failed(str(exc))
+
     def request_guess(self, *args):
         """Debounce inputs that change the inferred acquisition layout."""
-        if self.tabs.currentIndex() == 0:
+        if self.tabs.currentIndex() == 0 and self.load.isEnabled() and self.preview_button.isEnabled():
             self.cases.setValue(1)
             self.guess_timer.start()
 
@@ -206,6 +355,8 @@ class ImportDialog(W.QDialog):
     def guess_ready(self, guess):
         self.cases.setValue(1)
         self.repeats.setValue(guess["shots_per_case"])
+        if not self.load.isEnabled():
+            return
         shape = " × ".join(map(str, guess["spatial_shape"])) or "point"
         self.message.setText(
             f"Guessed 1 case and {guess['shots_per_case']} shots per case from "
@@ -242,6 +393,7 @@ class ImportDialog(W.QDialog):
             if any(a[1] < 1 for a in axes):
                 raise ValueError("Axis sizes must be positive.")
             t0 = float(self.t0.text())
+            temporal_options = self.temporal_options()
             spatial_units = self.space_units.text()
             if self.tabs.currentIndex() == 1:
                 selected = self.raw_paths.selectedItems()
@@ -250,7 +402,7 @@ class ImportDialog(W.QDialog):
                 paths = {f"C{i+1} · {item.data(C.Qt.UserRole).split('/')[-1]}": item.data(C.Qt.UserRole)
                          for i, item in enumerate(selected)}
                 dt, units = float(self.dt.text()), self.raw_units.text()
-                fn = lambda: io.read_raw(self.path, paths, axes, dt, t0, spatial_units, units)
+                fn = lambda: io.read_raw(self.path, paths, axes, dt, t0, spatial_units, units, **temporal_options)
             else:
                 selected = self.channels.selectedItems()
                 if not 1 <= len(selected) <= 3:
@@ -267,10 +419,13 @@ class ImportDialog(W.QDialog):
                 if stop is not None and stop <= start:
                     raise ValueError("Stop record must be greater than first record.")
                 def fn():
-                    rec = io.read_lapd(self.path, selections, ctrl, start, stop, t0, position_source)
+                    rec = io.read_lapd(self.path, selections, ctrl if use_motion else None, start, stop, t0, position_source,
+                                       **temporal_options)
                     return (io.map_motion(rec, cases, repeats, order, decimals) if use_motion
                             else io.map_manual(rec, axes, spatial_units))
             self.load.setEnabled(False)
+            self.preview_button.setEnabled(False)
+            self.guess_timer.stop()
             self.message.setText("Reading and mapping acquisition…")
             self.worker = Worker(fn, self)
             self.worker.result.connect(self.loaded)
@@ -282,15 +437,19 @@ class ImportDialog(W.QDialog):
     def loaded(self, data):
         self.dataset = data
         self.worker.wait()
+        if self.guess_worker and self.guess_worker.isRunning():
+            self.guess_worker.wait()
         self.accept()
 
     def failed(self, message):
         self.message.setText(message)
         self.load.setEnabled(True)
+        self.preview_button.setEnabled(True)
 
     def reject(self):
         if ((self.worker and self.worker.isRunning())
-                or (self.guess_worker and self.guess_worker.isRunning())):
+                or (self.guess_worker and self.guess_worker.isRunning())
+                or (self.preview_worker and self.preview_worker.isRunning())):
             self.message.setText("The read is still running. Close after it finishes.")
             return
         super().reject()

@@ -220,6 +220,147 @@ def test_import_dialog_applies_shot_guess_and_keeps_fields_editable(app, monkeyp
     dialog.reject()
 
 
+def test_temporal_preview_zoom_manual_limits_and_record_selection(app, tmp_path):
+    import time
+    import h5py
+    from lapd_explorer import io
+    from lapd_explorer.import_time_gui import ImportTimeDialog
+    path = tmp_path/"preview.h5"
+    t = np.arange(100001)*.001
+    values = np.array([np.sin(t)+i for i in range(3)])
+    with h5py.File(path, "w") as f:
+        f["signal"] = values
+    metadata = io.import_metadata(path, dataset_path="signal", dt=.001)
+    dialog = ImportTimeDialog(path, [("Signal", None, "signal")], dict(dt=.001), metadata, 0., {})
+    dialog.show()
+    def wait():
+        deadline = time.monotonic()+10
+        while time.monotonic() < deadline:
+            app.processEvents()
+            if not dialog.timer.isActive() and not dialog._pending and dialog.worker and not dialog.worker.isRunning():
+                app.processEvents()
+                return
+            time.sleep(.005)
+        pytest.fail("Preview did not finish")
+    wait()
+    assert "record index 1" in dialog.record_label.text()
+    assert len(dialog.line.get_xdata()) <= 20000
+    assert not dialog.mode.model().item(1).isEnabled()
+    assert not dialog.mode.model().item(2).isEnabled()
+    dialog.axis.set_xlim(10., 20.)
+    wait()
+    assert dialog.sample_limits() == (10000, 20000)
+    assert len(dialog.line.get_xdata()) == 10001
+    dialog.start.setValue(12.345)
+    dialog.last.setValue(20001)
+    wait()
+    assert dialog.sample_limits() == (12345, 20001)
+    assert dialog.stop.value() == pytest.approx(20.001)
+    dialog.index.setValue(2)
+    dialog.reload_button.click()
+    wait()
+    assert "record index 2" in dialog.record_label.text()
+    np.testing.assert_allclose(dialog.line.get_ydata(), values[2, 12345:20002])
+    dialog.grab().save(str(tmp_path/"temporal-preview.png"))
+    dialog.accept()
+    assert dialog.result() == W.QDialog.Accepted
+
+
+def test_import_dialog_reads_typed_temporal_limits_and_thins_on_disk(app, tmp_path):
+    import time
+    import h5py
+    from lapd_explorer import io
+    path = tmp_path/"raw.h5"
+    values = np.arange(120).reshape(3, 40)
+    with h5py.File(path, "w") as f:
+        f["signal"] = values
+    dialog = ImportDialog(path, io.inspect_file(path))
+    dialog.show()
+    dialog.raw_paths.item(0).setSelected(True)
+    dialog.add_axis()
+    dialog.axes.cellWidget(0, 0).setCurrentText("shot")
+    dialog.axes.item(0, 1).setText("3")
+    dialog.axes.item(0, 3).setText("2")
+    dialog.dt.setText("0.001")
+    dialog.t0.setText("-0.010")
+    dialog.time_range_mode.setCurrentIndex(2)
+    dialog.time_first.setText("-0.005")
+    dialog.time_last.setText("0.021")
+    dialog.decimation.setValue(3)
+    dialog.begin()
+    deadline = time.monotonic()+10
+    while dialog.dataset is None and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(.005)
+    assert dialog.dataset is not None, dialog.message.text()
+    np.testing.assert_array_equal(dialog.dataset.channels[next(iter(dialog.dataset.channels))], values[:, 5:32:3])
+    np.testing.assert_allclose(dialog.dataset.coords["time"], -.01+np.arange(5, 32, 3)*.001)
+    assert dialog.dataset.shape == (3, 9)
+    dialog.reject()
+
+
+def test_import_preview_global_shot_coordinate_and_applied_limits(app, tmp_path, monkeypatch):
+    import time
+    from bapsflib._hdf.maps.tests import FauxHDFBuilder
+    from lapd_explorer import io
+    from lapd_explorer.import_time_gui import ImportTimeDialog
+    path = tmp_path/"acquisition.hdf5"
+    with FauxHDFBuilder(str(path)) as f:
+        f.add_module("SIS 3301", {"sn_size": 8, "nt": 128})
+        f.add_module("bmotion", {"sn_size": 8})
+    importer = ImportDialog(path, io.inspect_file(path))
+    importer.decimation.setValue(4)
+    importer.show()
+    previewed = []
+    def choose(dialog):
+        dialog.show()
+        def wait():
+            deadline = time.monotonic()+10
+            while time.monotonic() < deadline:
+                app.processEvents()
+                if not dialog.timer.isActive() and not dialog._pending and dialog.worker and not dialog.worker.isRunning():
+                    app.processEvents()
+                    return
+                time.sleep(.005)
+            pytest.fail("Preview did not finish")
+        wait()
+        assert "record index 4" in dialog.record_label.text()
+        dialog.mode.setCurrentIndex(1)
+        shot = dialog.metadata["shots"][1]
+        dialog.shot.setText(str(shot))
+        dialog.reload_button.click()
+        wait()
+        assert f"global shot {shot}" in dialog.record_label.text()
+        dialog.mode.setCurrentIndex(2)
+        for box, value in zip(dialog.coordinates, dialog.metadata["xyz"][6]):
+            box.setText(str(value+.001))
+        dialog.reload_button.click()
+        wait()
+        assert "record index 6" in dialog.record_label.text()
+        dialog.first.setValue(17)
+        dialog.last.setValue(87)
+        wait()
+        dialog.grab().save(str(tmp_path/"motion-temporal-preview.png"))
+        dialog.accept()
+        previewed.append(dialog.sample_limits())
+        return dialog.result()
+    monkeypatch.setattr(ImportTimeDialog, "exec", choose)
+    importer.preview_time()
+    deadline = time.monotonic()+15
+    while not previewed and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(.005)
+    assert previewed == [(17, 87)], importer.message.text()
+    assert importer.temporal_options() == dict(sample_limits=(17, 87), decimation=4)
+    assert "Imported rate:" in importer.time_summary.text()
+    importer.grab().save(str(tmp_path/"import-temporal-controls.png"))
+    if importer.guess_worker:
+        importer.guess_worker.wait()
+    importer.guess_timer.stop()
+    app.processEvents()
+    importer.reject()
+
+
 def test_smoothing_dialog_and_processing(app, monkeypatch, tmp_path):
     from lapd_explorer.widgets import SmoothingDialog
     from lapd_explorer.smoothing import DEFAULT_SMOOTHING, smooth_time_series

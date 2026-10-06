@@ -4,6 +4,7 @@ import json
 import numpy as np
 import h5py
 from .model import Dataset
+from .temporal import sample_slice, selection_metadata
 
 
 @dataclass
@@ -78,75 +79,190 @@ def infer_shots_from_positions(xyz, decimals=4):
 
 def guess_shots_per_case(path, spec, control=None, start=0, stop=None,
                          position_source="target", decimals=4):
-    """Infer shots per spatial point while reading only one time sample."""
+    """Infer shots from one dataset's row count and optional motion metadata.
+
+    Shot estimation never reads digitizer signal samples.
+    """
     from bapsflib import lapd
 
-    opts = {key: spec[key] for key in ("digitizer", "adc", "config_name")
-            if spec.get(key) != ""}
     with lapd.File(path, mode="r") as f:
-        records = f.read_data(
-            spec["board"], spec["channel"], **opts,
-            index=slice(start, stop), time_slice=slice(0, 1),
-            add_controls=[tuple(control)] if control else None,
-        )
-    field = ("xyz_target" if position_source == "target"
-             and "xyz_target" in records.dtype.names else "xyz")
-    xyz = np.asarray(records[field], dtype=float)
-    if control is None or not np.all(np.isfinite(xyz)):
-        # Without motion metadata, the only defensible automatic assumption is
-        # a point acquisition.  The user can replace it with manual dimensions.
-        xyz = np.zeros((len(records), 3), dtype=float)
+        mapper, opts, group, dataset, _ = _digitizer_dataset(f, spec)
+        first, last, step = slice(start, stop).indices(dataset.shape[0])
+        count = len(range(first, last, step))
+        if not count:
+            raise ValueError("No records in the selected range.")
+
+        xyz = None
         field = "none (point assumed)"
-    shots, points, shape = infer_shots_from_positions(xyz, decimals)
+        if control is not None:
+            records = _record_metadata(f, mapper, opts, group, dataset.shape[0], control, start, stop, position_source)
+            field, xyz = records["position_field"], records["xyz"]
+            count = len(xyz)
+            if not count:
+                raise ValueError("No records in the selected range have matching motion metadata.")
+            if not np.all(np.isfinite(xyz)):
+                xyz = None
+                field = "none (point assumed)"
+    # Without finite motion metadata, assume a point without allocating one
+    # placeholder coordinate per record. The user may enter manual dimensions.
+    shots, points, shape = (count, 1, ()) if xyz is None else infer_shots_from_positions(xyz, decimals)
     return {
         "shots_per_case": shots,
         "spatial_points": points,
         "spatial_shape": shape,
-        "records": len(records),
+        "records": count,
         "position_field": field,
     }
 
 
-def read_lapd(path, selections, control=None, start=0, stop=None, t0=0.0, position_source="target"):
+def _digitizer_dataset(f, spec):
+    mapper = (f.digitizers[spec["digitizer"]] if spec.get("digitizer") else f.file_map.main_digitizer)
+    if mapper is None:
+        raise ValueError("Select a digitizer.")
+    config, adc = mapper.validate_config_name_and_adc(spec.get("config_name") or None, spec.get("adc") or None)
+    opts = dict(board=spec["board"], channel=spec["channel"], config_name=config, adc=adc)
+    name, info = mapper.construct_dataset_name(**opts, return_info=True)
+    group = f[mapper.info["group path"]]
+    return mapper, opts, group, group[name], info
+
+
+def _record_metadata(f, mapper, opts, group, count, control, start, stop, position_source):
+    first, last, step = slice(start, stop).indices(count)
+    indices = np.arange(first, last, step)
+    config = mapper.configs[opts["config_name"]]["shotnum"]
+    if config is None:
+        shots = indices + 1
+    else:
+        header = group[mapper.construct_header_dataset_name(**opts)]
+        shots = np.asarray(header.fields(config["dset field"][0])[first:last])
+    field, measured, target, controls = "xyz", np.full((len(shots), 3), np.nan), None, None
+    if control is not None and len(shots):
+        records = f.read_controls([tuple(control)], shotnum=shots)
+        valid = np.isin(shots, records["shotnum"])
+        indices, shots = indices[valid], shots[valid]
+        order = np.argsort(records["shotnum"])
+        rows = order[np.searchsorted(records["shotnum"][order], shots)]
+        measured = np.asarray(records["xyz"][rows], dtype=float)
+        if "xyz_target" in records.dtype.names:
+            target = np.asarray(records["xyz_target"][rows], dtype=float)
+            if position_source == "target":
+                field = "xyz_target"
+        controls = records.info["controls"]
+    return dict(indices=indices, shots=shots, xyz=target if field == "xyz_target" else measured,
+                measured=measured, target=target, position_field=field, controls=controls)
+
+
+def import_metadata(path, spec=None, dataset_path=None, dt=None, control=None,
+                    start=0, stop=None, position_source="target", decimals=4):
+    """Time base and record selectors for a preview; never reads signal samples."""
+    if spec is None:
+        with h5py.File(path, "r") as f:
+            dataset = f[dataset_path]
+            if dataset.ndim < 1:
+                raise ValueError("A time-series dataset is required.")
+            count = int(np.prod(dataset.shape[:-1]))
+            if not count:
+                raise ValueError("No records in this dataset.")
+            sample_slice(dataset.shape[-1], dt)
+            return dict(samples=dataset.shape[-1], dt=dt, indices=np.arange(count),
+                        shots=None, xyz=None, shape=dataset.shape, units="raw units")
     from bapsflib import lapd
-    arrays, reference, dt, xyz, infos = {}, None, None, None, {}
+    with lapd.File(path, mode="r") as f:
+        mapper, opts, group, dataset, info = _digitizer_dataset(f, spec)
+        rate = info.get("clock rate")
+        native_dt = None if rate is None else 1 / float(rate.to_value("Hz"))
+        if native_dt is not None:
+            native_dt *= float(info.get("sample average (hardware)") or 1)
+        if native_dt is None or not np.isfinite(native_dt) or native_dt <= 0:
+            raise ValueError("Digitizer sample interval is missing; use Raw HDF5 with an explicit interval.")
+        records = _record_metadata(f, mapper, opts, group, dataset.shape[0], control, start, stop, position_source)
+        if not len(records["indices"]):
+            raise ValueError("No records in the selected range.")
+        return dict(records, samples=dataset.shape[-1], dt=native_dt, shape=dataset.shape, units="V",
+                    coordinate_decimals=decimals)
+
+
+def preview_trace(path, metadata, record_index, first, last, t0=0., spec=None, dataset_path=None,
+                  max_points=20000):
+    """Read a bounded display trace, refining the sampling when the view zooms."""
+    if not isinstance(max_points, int) or max_points < 2:
+        raise ValueError("Preview point limit must be at least two.")
+    sample_slice(metadata["samples"], metadata["dt"], t0, sample_limits=(first, last))
+    step = max(1, int(np.ceil((last - first + 1) / max_points)))
+    selection = slice(first, last + 1, step)
+    if spec is None:
+        key = np.unravel_index(record_index, metadata["shape"][:-1]) if len(metadata["shape"]) > 1 else ()
+        with h5py.File(path, "r") as f:
+            values = np.asarray(f[dataset_path][key + (selection,)], dtype=float)
+    else:
+        from bapsflib import lapd
+        opts = {k: spec[k] for k in ("digitizer", "config_name", "adc") if spec.get(k)}
+        with lapd.File(path, mode="r") as f:
+            records = f.read_data(spec["board"], spec["channel"], **opts,
+                                  index=record_index, time_slice=selection)
+            values = np.array(records["signal"][0], copy=True)
+    return t0 + np.arange(first, last + 1, step) * metadata["dt"], values
+
+
+def read_lapd(path, selections, control=None, start=0, stop=None, t0=0.0, position_source="target",
+              *, sample_limits=None, time_limits=None, decimation=1):
+    from bapsflib import lapd
+    arrays, reference, time, dt, xyz, infos = {}, None, None, None, None, {}
     with lapd.File(path, mode="r") as f:
         infos["acquisition"] = dict(f.info)
         for name, spec in selections.items():
-            opts = {key: spec[key] for key in ("digitizer", "adc", "config_name")
-                    if spec.get(key) != ""}
-            r = f.read_data(spec["board"], spec["channel"], **opts,
-                            index=slice(start, stop),
-                            add_controls=[tuple(control)] if control else None)
-            shot = np.asarray(r["shotnum"])
-            signal = np.array(r["signal"], copy=True)
-            step = r.dt
-            if step is None:
+            mapper, opts, group, dataset, info = _digitizer_dataset(f, spec)
+            rate = info.get("clock rate")
+            if rate is None:
                 raise ValueError("Digitizer sample interval is missing. Use the raw HDF5 importer with an explicit interval.")
-            step = float(step.to_value("s") if hasattr(step, "to_value") else step)
+            step = float(info.get("sample average (hardware)") or 1) / float(rate.to_value("Hz"))
             if step <= 0 or not np.isfinite(step):
                 raise ValueError("Invalid digitizer sample interval.")
-            if reference is not None and (not np.array_equal(shot, reference)
-                    or signal.shape != next(iter(arrays.values())).shape
-                    or not np.isclose(step, dt, rtol=1e-10, atol=0)):
+            selection = sample_slice(dataset.shape[-1], step, t0, sample_limits, time_limits, decimation)
+            channel_time = t0 + np.arange(selection.start, selection.stop, selection.step) * step
+            meta = _record_metadata(f, mapper, opts, group, dataset.shape[0], control, start, stop, position_source)
+            shot = meta["shots"]
+            if not len(shot):
+                raise ValueError("No records in the selected range.")
+            if len(np.unique(shot)) != len(shot):
+                raise ValueError("Duplicate global shot numbers; select a single acquisition configuration.")
+            if reference is not None and (not np.array_equal(shot, reference) or not np.isclose(step, dt, rtol=1e-10, atol=0)
+                    or time.shape != channel_time.shape
+                    or not np.allclose(channel_time, time, rtol=1e-10, atol=0)):
                 raise ValueError("Vector channels must have identical shot numbers, sample counts and time steps.")
-            reference, dt = shot.copy(), step
+            reference, time, dt = shot.copy(), channel_time, step
+            # Keep only a bounded batch of calibrated source records alongside
+            # the final thinned array, instead of duplicating the entire channel.
+            signal = None
+            batch = max(1, min(256, 8_000_000 // len(time)))
+            read_opts = {key: spec[key] for key in ("digitizer", "adc", "config_name") if spec.get(key)}
+            for first in range(0, len(shot), batch):
+                rows = meta["indices"][first:first + batch].tolist()
+                r = f.read_data(spec["board"], spec["channel"], **read_opts, index=rows, time_slice=selection)
+                if not np.array_equal(r["shotnum"], shot[first:first + batch]):
+                    raise ValueError("Digitizer shot numbers changed while reading.")
+                if signal is None:
+                    signal = np.empty((len(shot), len(time)), dtype=r["signal"].dtype)
+                signal[first:first + batch] = r["signal"]
+                channel_info = dict(r.info)
+                del r
             arrays[name] = signal
-            position_field = "xyz_target" if position_source == "target" and "xyz_target" in r.dtype.names else "xyz"
-            current_xyz = np.asarray(r[position_field], dtype=float)
+            current_xyz = meta["xyz"]
             if xyz is not None and not np.allclose(current_xyz, xyz, equal_nan=True):
                 raise ValueError("Channel motion coordinates do not match.")
             xyz = current_xyz.copy()
-            infos[name] = dict(r.info)
-            infos[name]["position field used"] = position_field
-            infos[name]["measured xyz"] = np.asarray(r["xyz"]).tolist()
-            if "xyz_target" in r.dtype.names:
-                infos[name]["target xyz"] = np.asarray(r["xyz_target"]).tolist()
+            infos[name] = channel_info
+            infos[name]["controls"] = meta["controls"]
+            infos[name]["position field used"] = meta["position_field"]
+            infos[name]["measured xyz"] = meta["measured"].tolist()
+            infos[name]["temporal selection"] = selection_metadata(selection, step)
+            if meta["target"] is not None:
+                infos[name]["target xyz"] = meta["target"].tolist()
     if reference is None or len(reference) == 0:
         raise ValueError("No records in the selected range.")
     if len(np.unique(reference)) != len(reference):
         raise ValueError("Duplicate global shot numbers; select a single acquisition configuration.")
-    return Records(arrays, t0 + np.arange(signal.shape[-1])*dt, reference,
+    return Records(arrays, time, reference,
                    xyz, str(path), infos)
 
 
@@ -207,7 +323,21 @@ def map_motion(records, cases=1, repeats=1, repeat_order="case,shot", decimals=4
             coords.pop(d)
     return Dataset(output, tuple(dims), coords, source=records.source,
                    shot_numbers=shotmap, metadata=records.metadata,
-                   history=(f"Motion grid rounded to {decimals} decimals; per-position order {repeat_order}",))
+                   history=(f"Motion grid rounded to {decimals} decimals; per-position order {repeat_order}",) + _temporal_history(records))
+
+
+def _temporal_history(records):
+    if "temporal selection" in records.metadata:
+        selection = next(iter(records.metadata["temporal selection"].values()))
+    else:
+        selection = next((info["temporal selection"] for info in records.metadata.values()
+                          if isinstance(info, dict) and "temporal selection" in info), None)
+    if selection is None:
+        return ()
+    return (f"Import original samples {selection['first original sample']}–"
+            f"{selection['last original sample limit (inclusive)']}; keep every "
+            f"{selection['keep every Nth sample']} sample(s); effective rate "
+            f"{selection['effective sampling rate (Hz)']:g} Hz",)
 
 
 def map_manual(records, axes, spatial_units="cm"):
@@ -221,24 +351,44 @@ def map_manual(records, axes, spatial_units="cm"):
     arrays = {n: a.reshape(sizes + (len(records.time),)) for n, a in records.channels.items()}
     return Dataset(arrays, dims, coords, spatial_units=spatial_units, source=records.source,
                    shot_numbers=records.shots.reshape(sizes), metadata=records.metadata,
-                   history=("Manual mapping, C order (last listed axis varies fastest)",))
+                   history=("Manual mapping, C order (last listed axis varies fastest)",) + _temporal_history(records))
 
 
-def read_raw(path, paths, axes, dt, t0=0, spatial_units="cm", units="V"):
+def read_raw(path, paths, axes, dt, t0=0, spatial_units="cm", units="V",
+             *, sample_limits=None, time_limits=None, decimation=1):
     if not np.isfinite(dt) or dt <= 0 or not np.isfinite(t0):
         raise ValueError("Sample interval must be positive and start time finite.")
-    arrays = {}
+    arrays, time, temporal = {}, None, {}
     with h5py.File(path, "r") as f:
         for name, p in paths.items():
-            a = np.asarray(f[p], dtype=float)
-            if a.ndim < 1:
+            dataset = f[p]
+            if dataset.ndim < 1:
                 raise ValueError("A time-series dataset is required.")
-            arrays[name] = a.reshape(-1, a.shape[-1])
+            selection = sample_slice(dataset.shape[-1], dt, t0, sample_limits, time_limits, decimation)
+            channel_time = t0 + np.arange(selection.start, selection.stop, selection.step) * dt
+            if time is not None and not np.array_equal(time, channel_time):
+                raise ValueError("Raw channels must have matching record/time shapes.")
+            time = channel_time
+            count = int(np.prod(dataset.shape[:-1]))
+            a = np.empty((count, len(time)), dtype=float)
+            if dataset.ndim == 1:
+                a[0] = dataset[selection]
+            else:
+                batch = max(1, min(256, 8_000_000 // len(time)))
+                row = 0
+                for prefix in np.ndindex(dataset.shape[:-2]):
+                    for first in range(0, dataset.shape[-2], batch):
+                        last = min(dataset.shape[-2], first + batch)
+                        a[row:row + last - first] = dataset[prefix + (slice(first, last), selection)]
+                        row += last - first
+            arrays[name] = a
+            temporal[name] = selection_metadata(selection, dt)
     shape = next(iter(arrays.values())).shape
     if any(a.shape != shape for a in arrays.values()):
         raise ValueError("Raw channels must have matching record/time shapes.")
-    records = Records(arrays, t0+np.arange(shape[-1])*dt, np.arange(shape[0]), None, str(path),
-                      {"raw datasets": paths, "shot numbers": "record indices; global shot numbers unavailable"})
+    records = Records(arrays, time, np.arange(shape[0]), None, str(path),
+                      {"raw datasets": paths, "temporal selection": temporal,
+                       "shot numbers": "record indices; global shot numbers unavailable"})
     result = map_manual(records, axes, spatial_units)
     result.units = units
     result.shot_numbers = None
