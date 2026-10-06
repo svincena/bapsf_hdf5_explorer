@@ -1,12 +1,14 @@
 """Shared Qt controls, workers, and acquisition/import dialogs."""
 from PySide6 import QtCore as C, QtGui as G, QtWidgets as W
 from . import io
+from .temporal import DOWNSAMPLING_METHODS, retained_samples
 from .appearance import FacilityLogo
 
 
 class Worker(C.QThread):
     result = C.Signal(object)
     failed = C.Signal(str)
+    progress = C.Signal(float, float, str)
 
     def __init__(self, fn, parent=None):
         super().__init__(parent)
@@ -225,6 +227,12 @@ class ImportDialog(W.QDialog):
         temporal_form.addRow("First sample / time", self.time_first)
         temporal_form.addRow("Last sample / time", self.time_last)
         temporal_form.addRow("Keep every Nth sample", self.decimation)
+        self.downsampling = combo(list(DOWNSAMPLING_METHODS))
+        self.downsampling.setMinimumContentsLength(24)
+        self.temporal_form = temporal_form
+        temporal_form.addRow("Downsampling", self.downsampling)
+        temporal_form.setRowVisible(self.downsampling, False)
+        self.downsampling.currentIndexChanged.connect(self.update_time_summary)
         self.preview_button = W.QPushButton("Preview one trace / choose limits…")
         self.preview_button.clicked.connect(self.preview_time)
         temporal_form.addRow(self.preview_button)
@@ -285,6 +293,14 @@ class ImportDialog(W.QDialog):
         split.addWidget(time_scroll)
         split.setSizes([660, 340])
         outer_layout.addWidget(split, 1)
+        self.import_progress = W.QProgressBar()
+        self.import_progress.setRange(0, 1000)
+        self.import_progress.setVisible(False)
+        self.progress_detail = W.QLabel()
+        self.progress_detail.setWordWrap(True)
+        self.progress_detail.setVisible(False)
+        outer_layout.addWidget(self.import_progress)
+        outer_layout.addWidget(self.progress_detail)
         outer_layout.addWidget(buttons)
         self.guess_timer = C.QTimer(self)
         self.guess_timer.setSingleShot(True)
@@ -322,6 +338,8 @@ class ImportDialog(W.QDialog):
 
     def temporal_options(self):
         options = dict(decimation=self.decimation.value())
+        if self.decimation.value() > 1:
+            options["downsampling"] = DOWNSAMPLING_METHODS[self.downsampling.currentText()]
         mode = self.time_range_mode.currentIndex()
         if mode:
             cast = int if mode == 1 else float
@@ -331,14 +349,20 @@ class ImportDialog(W.QDialog):
         return options
 
     def update_time_summary(self):
-        self.alias_note.setVisible(self.decimation.value() > 1)
+        active = self.decimation.value() > 1
+        self.temporal_form.setRowVisible(self.downsampling, active)
+        self.alias_note.setVisible(active)
+        notes = {"polyphase": "Low-pass FIR filtering before resampling; zero padding at the selected interval edges.",
+                 "simple": "No anti-alias filtering: frequencies above the reduced Nyquist limit can alias.",
+                 "average": "Average complete blocks of N samples; use block-center times and discard an incomplete final block. Averages provide weaker anti-alias suppression than FIR."}
+        self.alias_note.setText(notes[DOWNSAMPLING_METHODS[self.downsampling.currentText()]])
         if self.temporal_metadata is None:
             return
         try:
             from .temporal import sample_slice
             meta = self.temporal_metadata
             selection = sample_slice(meta["samples"], meta["dt"], float(self.t0.text()), **self.temporal_options())
-            count = len(range(selection.start, selection.stop, selection.step))
+            count = retained_samples(selection, DOWNSAMPLING_METHODS[self.downsampling.currentText()])
             rate = 1 / (meta["dt"] * selection.step)
             self.time_summary.setText(f"Original rate: {1/meta['dt']:g} Hz · Imported rate: {rate:g} Hz · "
                                       f"Nyquist: {rate/2:g} Hz\nRetain {count:,} / {meta['samples']:,} samples per trace "
@@ -495,7 +519,7 @@ class ImportDialog(W.QDialog):
                 paths = {f"C{i+1} · {item.data(C.Qt.UserRole).split('/')[-1]}": item.data(C.Qt.UserRole)
                          for i, item in enumerate(selected)}
                 dt, units = float(self.dt.text()), self.raw_units.text()
-                fn = lambda: io.read_raw(self.path, paths, axes, dt, t0, spatial_units, units, **temporal_options)
+                fn = lambda: io.read_raw(self.path, paths, axes, dt, t0, spatial_units, units, progress=report, **temporal_options)
             else:
                 selected = self.channels.selectedItems()
                 if not 1 <= len(selected) <= 3:
@@ -513,19 +537,37 @@ class ImportDialog(W.QDialog):
                     raise ValueError("Stop record must be greater than first record.")
                 def fn():
                     rec = io.read_lapd(self.path, selections, ctrl if use_motion else None, start, stop, t0, position_source,
-                                       **temporal_options)
-                    return (io.map_motion(rec, cases, repeats, order, decimals) if use_motion
-                            else io.map_manual(rec, axes, spatial_units))
+                                       progress=report, **temporal_options)
+                    return (io.map_motion(rec, cases, repeats, order, decimals, progress=report) if use_motion
+                            else io.map_manual(rec, axes, spatial_units, progress=report))
             self.load.setEnabled(False)
             self.preview_button.setEnabled(False)
             self.guess_timer.stop()
             self.message.setText("Reading and mapping acquisition…")
+            def report(done, total, stage):
+                self.worker.progress.emit(done, total, stage)
+            self.import_progress.setValue(0)
+            self.import_progress.setVisible(True)
+            self.progress_detail.setText("Preparing acquisition…")
+            self.progress_detail.setVisible(True)
             self.worker = Worker(fn, self)
+            self.worker.progress.connect(self.update_import_progress)
             self.worker.result.connect(self.loaded)
             self.worker.failed.connect(self.failed)
             self.worker.start()
         except Exception as exc:
             self.failed(str(exc))
+
+    def update_import_progress(self, done, total, stage):
+        fraction = min(1., max(0., done / total)) if total else 0.
+        self.import_progress.setValue(round(fraction*1000))
+        phase = 2 if stage == "Mapping" else 1
+        self.import_progress.setFormat(f"Stage {phase}/2 · {fraction:.0%} complete")
+        if stage == "Mapping":
+            detail = f"{fraction:.0%} complete · {1-fraction:.0%} remaining"
+        else:
+            detail = f"{round(done):,} / {round(total):,} samples processed · {round(total-done):,} remaining"
+        self.progress_detail.setText(f"{stage}: {detail}")
 
     def loaded(self, data):
         self.dataset = data
@@ -535,6 +577,8 @@ class ImportDialog(W.QDialog):
         self.accept()
 
     def failed(self, message):
+        self.import_progress.setVisible(False)
+        self.progress_detail.setVisible(False)
         self.message.setText(message)
         self.load.setEnabled(True)
         self.preview_button.setEnabled(True)

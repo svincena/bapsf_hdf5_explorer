@@ -1,13 +1,37 @@
 """Temporal import selection in original sample indices, before thinning."""
 import math
+import os
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 import numpy as np
+from scipy.signal import firwin, resample_poly
 
 
-def sample_slice(samples, dt, t0=0., sample_limits=None, time_limits=None, decimation=1):
+DOWNSAMPLING_METHODS = {"Polyphase FIR resampling": "polyphase",
+                        "Simple decimation": "simple", "Block averaging": "average"}
+SOURCE_CHUNK_SAMPLES = 65536
+
+
+def retained_samples(selection, downsampling="polyphase"):
+    length = selection.stop - selection.start
+    return length // selection.step if downsampling == "average" else len(range(selection.start, selection.stop, selection.step))
+
+
+def sample_times(selection, dt, t0=0., downsampling="polyphase"):
+    offset = (selection.step - 1) / 2 if downsampling == "average" else 0
+    return t0 + (selection.start + offset + np.arange(retained_samples(selection, downsampling))*selection.step)*dt
+
+
+def sample_slice(samples, dt, t0=0., sample_limits=None, time_limits=None, decimation=1,
+                 downsampling="polyphase"):
     if not np.isfinite(dt) or dt <= 0 or not np.isfinite(t0):
         raise ValueError("Sample interval must be positive and time origin finite.")
     if not isinstance(decimation, (int, np.integer)) or isinstance(decimation, bool) or decimation < 1:
         raise ValueError("Keep-every factor must be a positive integer.")
+    if downsampling not in DOWNSAMPLING_METHODS.values():
+        raise ValueError("Unknown downsampling method.")
+    if downsampling == "polyphase" and decimation > 50000:
+        raise ValueError("Polyphase FIR supports factors up to 50,000; choose a smaller factor or another method.")
     if sample_limits is not None and time_limits is not None:
         raise ValueError("Choose either sample limits or time limits.")
     first, last = 0, samples - 1
@@ -27,19 +51,99 @@ def sample_slice(samples, dt, t0=0., sample_limits=None, time_limits=None, decim
             raise ValueError("Sample limits must be integer indices.")
     if not 0 <= first <= last < samples:
         raise ValueError(f"Choose ordered limits within original samples 0–{samples - 1}.")
-    if len(range(first, last + 1, decimation)) < 2:
+    selection = slice(first, last + 1, decimation)
+    if retained_samples(selection, downsampling) < 2:
         raise ValueError("The imported interval must retain at least two time samples.")
-    return slice(first, last + 1, decimation)
+    return selection
 
 
-def selection_metadata(selection, dt):
-    return {"first original sample": selection.start,
+def source_chunk_samples(selection, downsampling):
+    """Upper bound on the samples read per record in a filtered batch."""
+    if selection.step == 1 or downsampling == "simple":
+        return retained_samples(selection, downsampling)
+    halo = 20*selection.step if downsampling == "polyphase" else 0
+    return min(selection.stop-selection.start, SOURCE_CHUNK_SAMPLES + halo)
+
+
+def resample_into(read, output, selection, downsampling="polyphase", *, chunk_samples=SOURCE_CHUNK_SAMPLES, progress=None):
+    """Parallelize substantial numeric work across records; keep HDF5 reads serial."""
+    workers = min(4, os.cpu_count() or 1, len(output))
+    parallel = selection.step > 1 and downsampling == "polyphase" and output.size*selection.step >= 262144 and workers > 1
+    with ThreadPoolExecutor(max_workers=workers) if parallel else nullcontext() as pool:
+        _resample_into(read, output, selection, downsampling, chunk_samples=chunk_samples, pool=pool, progress=progress)
+
+
+def _resample_into(read, output, selection, downsampling, *, chunk_samples, pool, progress):
+    """Fill a record batch from bounded disk reads, keeping one global sample phase.
+
+    FIR chunks include the entire filter support on both sides. Only the
+    selected interval's true endpoints use zero padding, matching resample_poly
+    on the complete cropped trace. Averaging keeps complete blocks only.
+    """
+    factor = selection.step
+    if factor == 1 or downsampling == "simple":
+        output[:] = read(selection)
+        if progress:
+            progress(output.shape[-1])
+        return
+    count = output.shape[-1]
+    outputs_per_chunk = max(1, chunk_samples // factor)
+    if downsampling == "polyphase":
+        half = 10*factor
+        coefficients = firwin(2*half+1, 1/factor, window=("kaiser", 5.0))
+        for first in range(0, count, outputs_per_chunk):
+            last = min(count, first+outputs_per_chunk)
+            center = selection.start + first*factor
+            lo = max(selection.start, center-half)
+            hi = min(selection.stop, selection.start+(last-1)*factor+half+1)
+            values = read(slice(lo, hi, 1))
+            skip = (center-lo)//factor
+            rows = np.array_split(np.arange(len(output)), min(4, len(output))) if pool is not None else [np.arange(len(output))]
+            def filter_rows(indices):
+                return resample_poly(values[indices[0]:indices[-1]+1], 1, factor, axis=-1, window=coefficients)[:, skip:skip+last-first]
+            results = pool.map(filter_rows, rows) if pool is not None else map(filter_rows, rows)
+            for indices, filtered in zip(rows, results):
+                output[indices[0]:indices[-1]+1, first:last] = filtered
+            del values, filtered
+            if progress:
+                progress(last)
+    elif downsampling == "average":
+        for first in range(0, count, outputs_per_chunk):
+            last = min(count, first+outputs_per_chunk)
+            lo, hi = selection.start+first*factor, selection.start+last*factor
+            if factor <= chunk_samples:
+                values = read(slice(lo, hi, 1))
+                output[:, first:last] = values.reshape(len(output), last-first, factor).mean(axis=-1, dtype=np.float64)
+                del values
+            else:
+                # Even a single averaging block may exceed the read budget.
+                total = np.zeros(len(output), dtype=np.float64)
+                for start in range(lo, hi, chunk_samples):
+                    total += read(slice(start, min(hi, start+chunk_samples), 1)).sum(axis=-1, dtype=np.float64)
+                output[:, first] = total/factor
+            if progress:
+                progress(last)
+    else:
+        raise ValueError("Unknown downsampling method.")
+
+
+def selection_metadata(selection, dt, downsampling="polyphase"):
+    active = selection.step > 1
+    info = {"first original sample": selection.start,
             "last original sample limit (inclusive)": selection.stop - 1,
             "keep every Nth sample": selection.step,
             "original sample interval (s)": dt,
             "effective sample interval (s)": dt * selection.step,
             "effective sampling rate (Hz)": 1 / (dt * selection.step),
-            "anti-alias filtering": False}
+            "downsampling method": downsampling if active else "none",
+            "anti-alias filtering": active and downsampling != "simple"}
+    if active and downsampling == "polyphase":
+        info.update({"FIR taps": 20*selection.step+1, "FIR window": "Kaiser, beta=5",
+                     "FIR cutoff (Hz)": 1/(2*dt*selection.step), "interval edge padding": "zero"})
+    elif active and downsampling == "average":
+        info.update({"filter": "boxcar; weak anti-alias suppression", "time coordinates": "block centers",
+                     "discarded trailing samples": (selection.stop-selection.start) % selection.step})
+    return info
 
 
 def preview_record(metadata, mode="index", index=None, shot=None, position=None, repeat=0, decimals=4):

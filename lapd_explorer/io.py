@@ -4,7 +4,7 @@ import json
 import numpy as np
 import h5py
 from .model import Dataset
-from .temporal import sample_slice, selection_metadata
+from .temporal import sample_slice, selection_metadata, sample_times, source_chunk_samples, resample_into
 
 
 @dataclass
@@ -240,12 +240,12 @@ def preview_trace(path, metadata, record_index, first, last, t0=0., spec=None, d
 
 
 def read_lapd(path, selections, control=None, start=0, stop=None, t0=0.0, position_source="target",
-              *, sample_limits=None, time_limits=None, decimation=1):
+              *, sample_limits=None, time_limits=None, decimation=1, downsampling="polyphase", progress=None):
     from bapsflib import lapd
     arrays, reference, time, dt, xyz, infos = {}, None, None, None, None, {}
     with lapd.File(path, mode="r") as f:
         infos["acquisition"] = dict(f.info)
-        for name, spec in selections.items():
+        for channel_index, (name, spec) in enumerate(selections.items()):
             mapper, opts, group, dataset, info = _digitizer_dataset(f, spec)
             rate = info.get("clock rate")
             if rate is None:
@@ -253,8 +253,8 @@ def read_lapd(path, selections, control=None, start=0, stop=None, t0=0.0, positi
             step = float(info.get("sample average (hardware)") or 1) / float(rate.to_value("Hz"))
             if step <= 0 or not np.isfinite(step):
                 raise ValueError("Invalid digitizer sample interval.")
-            selection = sample_slice(dataset.shape[-1], step, t0, sample_limits, time_limits, decimation)
-            channel_time = t0 + np.arange(selection.start, selection.stop, selection.step) * step
+            selection = sample_slice(dataset.shape[-1], step, t0, sample_limits, time_limits, decimation, downsampling)
+            channel_time = sample_times(selection, step, t0, downsampling)
             meta = _record_metadata(f, mapper, opts, group, dataset.shape[0], control, start, stop, position_source)
             shot = meta["shots"]
             if not len(shot):
@@ -266,21 +266,27 @@ def read_lapd(path, selections, control=None, start=0, stop=None, t0=0.0, positi
                     or not np.allclose(channel_time, time, rtol=1e-10, atol=0)):
                 raise ValueError("Vector channels must have identical shot numbers, sample counts and time steps.")
             reference, time, dt = shot.copy(), channel_time, step
-            # Keep only a bounded batch of calibrated source records alongside
-            # the final thinned array, instead of duplicating the entire channel.
-            signal = None
-            batch = max(1, min(256, 8_000_000 // len(time)))
+            signal = np.empty((len(shot), len(time)), dtype=np.float32)
+            batch = max(1, min(256, 8_000_000 // source_chunk_samples(selection, downsampling)))
             read_opts = {key: spec[key] for key in ("digitizer", "adc", "config_name") if spec.get(key)}
+            channel_info = {}
             for first in range(0, len(shot), batch):
                 rows = meta["indices"][first:first + batch].tolist()
-                r = f.read_data(spec["board"], spec["channel"], **read_opts, index=rows, time_slice=selection)
-                if not np.array_equal(r["shotnum"], shot[first:first + batch]):
-                    raise ValueError("Digitizer shot numbers changed while reading.")
-                if signal is None:
-                    signal = np.empty((len(shot), len(time)), dtype=r["signal"].dtype)
-                signal[first:first + batch] = r["signal"]
-                channel_info = dict(r.info)
-                del r
+                def read(part):
+                    r = f.read_data(spec["board"], spec["channel"], **read_opts, index=rows, time_slice=part)
+                    if not np.array_equal(r["shotnum"], shot[first:first + batch]):
+                        raise ValueError("Digitizer shot numbers changed while reading.")
+                    channel_info.update(r.info)
+                    return r["signal"]
+                def report(completed):
+                    if progress:
+                        done = first + len(rows)*completed/len(time)
+                        progress((channel_index*len(shot) + done)*len(time),
+                                 len(selections)*len(shot)*len(time), "Reading / resampling")
+                if first == 0:
+                    report(0)
+                resample_into(read, signal[first:first+len(rows)], selection, downsampling, progress=report)
+            channel_info["time_slice"] = selection
             arrays[name] = signal
             current_xyz = meta["xyz"]
             if xyz is not None and not np.allclose(current_xyz, xyz, equal_nan=True):
@@ -294,7 +300,7 @@ def read_lapd(path, selections, control=None, start=0, stop=None, t0=0.0, positi
             infos[name]["controls"] = meta["controls"]
             infos[name]["position field used"] = meta["position_field"]
             infos[name]["measured xyz"] = meta["measured"].tolist()
-            infos[name]["temporal selection"] = selection_metadata(selection, step)
+            infos[name]["temporal selection"] = selection_metadata(selection, step, downsampling)
             if meta["target"] is not None:
                 infos[name]["target xyz"] = meta["target"].tolist()
     if reference is None or len(reference) == 0:
@@ -305,12 +311,14 @@ def read_lapd(path, selections, control=None, start=0, stop=None, t0=0.0, positi
                    xyz, str(path), infos)
 
 
-def map_motion(records, cases=1, repeats=1, repeat_order="case,shot", decimals=4):
+def map_motion(records, cases=1, repeats=1, repeat_order="case,shot", decimals=4, *, progress=None):
     """Group by position, then explicitly map per-position acquisition order.
 
     Reject incomplete grids and unmatched repeat counts rather than silently
     combining missing positions or treating parameter scans as statistics.
     """
+    if progress:
+        progress(0, len(records.shots)*2, "Mapping")
     xyz = records.xyz
     if xyz is None or not np.all(np.isfinite(xyz)):
         raise ValueError("Finite motion coordinates are unavailable. Use manual dimensions.")
@@ -334,8 +342,11 @@ def map_motion(records, cases=1, repeats=1, repeat_order="case,shot", decimals=4
     for row in range(len(xyz)):
         key = tuple(int(np.searchsorted(coords[d], xyz[row, i])) for d, i in zip(dims, axes))
         buckets.setdefault(key, []).append(row)
+        if progress and (row % 256 == 0 or row+1 == len(xyz)):
+            progress(row+1, len(xyz)*2, "Mapping")
     if len(buckets) != int(np.prod(shape)):
         raise ValueError("Motion points do not form a complete rectangular grid.")
+    mapped = reported = 0
     for key, rows in buckets.items():
         if len(rows) != cases*repeats:
             raise ValueError("Unequal records per position; select a balanced acquisition subset.")
@@ -350,6 +361,10 @@ def map_motion(records, cases=1, repeats=1, repeat_order="case,shot", decimals=4
         block = records.shots[rows]
         shotmap[key] = (block.reshape(cases, repeats) if repeat_order == "case,shot"
                         else block.reshape(repeats, cases).T)
+        mapped += len(rows)
+        if progress and (mapped-reported >= 256 or mapped == len(xyz)):
+            progress(len(xyz)+mapped, len(xyz)*2, "Mapping")
+            reported = mapped
     dims += ["case", "shot", "time"]
     coords.update(case=np.arange(cases), shot=np.arange(repeats), time=records.time)
     # Singleton case/repeat axes carry no extra statistical information.
@@ -374,13 +389,16 @@ def _temporal_history(records):
     if selection is None:
         return ()
     return (f"Import original samples {selection['first original sample']}–"
-            f"{selection['last original sample limit (inclusive)']}; keep every "
-            f"{selection['keep every Nth sample']} sample(s); effective rate "
-            f"{selection['effective sampling rate (Hz)']:g} Hz",)
+            f"{selection['last original sample limit (inclusive)']}; downsampling factor "
+            f"{selection['keep every Nth sample']}; effective rate "
+            f"{selection['effective sampling rate (Hz)']:g} Hz; "
+            f"method {selection.get('downsampling method', 'simple')}",)
 
 
-def map_manual(records, axes, spatial_units="cm"):
+def map_manual(records, axes, spatial_units="cm", *, progress=None):
     """axes = [(name, size, start, stop), ...] in slowest-to-fastest order."""
+    if progress:
+        progress(0, 1, "Mapping")
     dims = tuple(a[0] for a in axes) + ("time",)
     sizes = tuple(a[1] for a in axes)
     if int(np.prod(sizes)) != len(records.shots):
@@ -388,47 +406,58 @@ def map_manual(records, axes, spatial_units="cm"):
     coords = {name: np.linspace(start, stop, size) for name, size, start, stop in axes}
     coords["time"] = records.time
     arrays = {n: a.reshape(sizes + (len(records.time),)) for n, a in records.channels.items()}
+    if progress:
+        progress(1, 1, "Mapping")
     return Dataset(arrays, dims, coords, spatial_units=spatial_units, source=records.source,
                    shot_numbers=records.shots.reshape(sizes), metadata=records.metadata,
                    history=("Manual mapping, C order (last listed axis varies fastest)",) + _temporal_history(records))
 
 
 def read_raw(path, paths, axes, dt, t0=0, spatial_units="cm", units="V",
-             *, sample_limits=None, time_limits=None, decimation=1):
+             *, sample_limits=None, time_limits=None, decimation=1, downsampling="polyphase", progress=None):
     if not np.isfinite(dt) or dt <= 0 or not np.isfinite(t0):
         raise ValueError("Sample interval must be positive and start time finite.")
     arrays, time, temporal = {}, None, {}
     with h5py.File(path, "r") as f:
-        for name, p in paths.items():
+        for channel_index, (name, p) in enumerate(paths.items()):
             dataset = f[p]
             if dataset.ndim < 1:
                 raise ValueError("A time-series dataset is required.")
-            selection = sample_slice(dataset.shape[-1], dt, t0, sample_limits, time_limits, decimation)
-            channel_time = t0 + np.arange(selection.start, selection.stop, selection.step) * dt
+            selection = sample_slice(dataset.shape[-1], dt, t0, sample_limits, time_limits, decimation, downsampling)
+            channel_time = sample_times(selection, dt, t0, downsampling)
             if time is not None and not np.array_equal(time, channel_time):
                 raise ValueError("Raw channels must have matching record/time shapes.")
             time = channel_time
             count = int(np.prod(dataset.shape[:-1]))
             a = np.empty((count, len(time)), dtype=float)
+            def report(completed, row, rows):
+                if progress:
+                    done = row + rows*completed/len(time)
+                    progress((channel_index*count + done)*len(time),
+                             len(paths)*count*len(time), "Reading / resampling")
+            report(0, 0, 0)
             if dataset.ndim == 1:
-                a[0] = dataset[selection]
+                resample_into(lambda part: np.asarray(dataset[part], dtype=float)[None, :], a, selection,
+                              downsampling, progress=lambda done: report(done, 0, 1))
             else:
-                batch = max(1, min(256, 8_000_000 // len(time)))
+                batch = max(1, min(256, 8_000_000 // source_chunk_samples(selection, downsampling)))
                 row = 0
                 for prefix in np.ndindex(dataset.shape[:-2]):
                     for first in range(0, dataset.shape[-2], batch):
                         last = min(dataset.shape[-2], first + batch)
-                        a[row:row + last - first] = dataset[prefix + (slice(first, last), selection)]
+                        resample_into(lambda part: np.asarray(dataset[prefix + (slice(first, last), part)], dtype=float),
+                                      a[row:row+last-first], selection, downsampling,
+                                      progress=lambda done: report(done, row, last-first))
                         row += last - first
             arrays[name] = a
-            temporal[name] = selection_metadata(selection, dt)
+            temporal[name] = selection_metadata(selection, dt, downsampling)
     shape = next(iter(arrays.values())).shape
     if any(a.shape != shape for a in arrays.values()):
         raise ValueError("Raw channels must have matching record/time shapes.")
     records = Records(arrays, time, np.arange(shape[0]), None, str(path),
                       {"raw datasets": paths, "temporal selection": temporal,
                        "shot numbers": "record indices; global shot numbers unavailable"})
-    result = map_manual(records, axes, spatial_units)
+    result = map_manual(records, axes, spatial_units, progress=progress)
     result.units = units
     result.shot_numbers = None
     return result

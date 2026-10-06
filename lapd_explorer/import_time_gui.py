@@ -295,7 +295,8 @@ class ImportTimeDialog(W.QDialog):
             return
         try:
             sample_slice(self.metadata["samples"], self.metadata["dt"], self.t0,
-                         sample_limits=self.sample_limits(), decimation=self.options.get("decimation", 1))
+                         sample_limits=self.sample_limits(), decimation=self.options.get("decimation", 1),
+                         downsampling=self.options.get("downsampling", "polyphase"))
         except ValueError as exc:
             self.message.setText(str(exc))
             return

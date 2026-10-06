@@ -187,12 +187,26 @@ HDF5 data:
   Leave the final bound blank for the end of the recording. **All samples**
   retains the complete time range.
 - Set **Keep every Nth sample** to an integer factor; one keeps all samples.
-  The importer reads only those samples from HDF5 and adjusts the imported time
-  spacing and effective sampling rate. For example, keeping every tenth sample
-  of a 100 MHz acquisition gives a 10 MHz imported rate and 5 MHz Nyquist limit.
-  Thinning does not apply an anti-alias filter; higher-frequency signals can
-  alias. Crop and thinning may be combined. Thinning starts at the chosen first
-  sample; the last retained sample may precede the inclusive end limit.
+  Above one, a **Downsampling** choice appears. The imported time spacing is
+  multiplied by N: a 100 MHz acquisition with N=10 becomes 10 MHz, with a
+  5 MHz Nyquist limit. Crop and downsampling may be combined.
+- **Polyphase FIR resampling** is the default. A low-pass Kaiser FIR (20N+1
+  taps, beta=5) suppresses higher frequencies before reducing the sample rate.
+  Bounded overlapping disk reads avoid artificial chunk boundaries; only the
+  chosen interval edges use zero padding. Substantial filtering batches use
+  up to four CPU cores across records, while HDF5 access stays serialized.
+  Factors above 50,000 require a smaller factor or another method to bound
+  filter memory. The first output is aligned to the first selected sample.
+- **Simple decimation** reads every Nth original sample directly from disk,
+  without anti-alias filtering. Higher-frequency signals can alias. The last
+  retained sample may precede the inclusive end limit.
+- **Block averaging** averages consecutive complete blocks of N samples and
+  uses their center times. An incomplete trailing block is discarded. Averaging
+  has weaker anti-alias suppression than FIR. All methods require at least
+  two output samples, and their settings are recorded in saved metadata.
+- During import, a progress bar and counts show samples processed and remaining,
+  followed by mapping progress. Progress measures work completed, not estimated
+  time remaining.
 - Choose **Preview one trace / choose limits…** to open a zoom/pan toolbar and
   draggable interval. The initial trace comes from the middle of the selected
   record range. Choose another selected channel, original record index, global
@@ -203,7 +217,8 @@ HDF5 data:
   preview. The entries stay synchronized with the plot. **Use these limits**
   copies the final original indices into the importer, where they may still be
   edited. Zooming reloads only the visible interval; the display contains at
-  most 20,000 points from one trace. Display thinning can hide short features,
+  most 20,000 original points from one trace; import filtering is applied only
+  when loading. Display thinning can hide short features,
   so zoom in to inspect them.
 
 After previewing, the importer shows the original and effective rates, Nyquist

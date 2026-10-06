@@ -370,6 +370,7 @@ def test_import_dialog_reads_typed_temporal_limits_and_thins_on_disk(app, tmp_pa
     dialog.time_first.setText("-0.005")
     dialog.time_last.setText("0.021")
     dialog.decimation.setValue(3)
+    dialog.downsampling.setCurrentText("Simple decimation")
     dialog.begin()
     deadline = time.monotonic()+10
     while dialog.dataset is None and time.monotonic() < deadline:
@@ -434,7 +435,7 @@ def test_import_preview_global_shot_coordinate_and_applied_limits(app, tmp_path,
         app.processEvents()
         time.sleep(.005)
     assert previewed == [(17, 87)], importer.message.text()
-    assert importer.temporal_options() == dict(sample_limits=(17, 87), decimation=4)
+    assert importer.temporal_options() == dict(sample_limits=(17, 87), decimation=4, downsampling="polyphase")
     assert "Imported rate:" in importer.time_summary.text()
     importer.grab().save(str(tmp_path/"import-temporal-controls.png"))
     if importer.guess_worker:
@@ -859,3 +860,40 @@ def test_manual_colormap_range_playback_and_export(app):
     assert control.isHidden()
     assert w.options()["color_limits"] is None
     w.close()
+
+
+def test_import_downsampling_choices_summary_and_progress(app, tmp_path):
+    from lapd_explorer import io
+    import h5py
+    path = tmp_path/"choices.h5"
+    with h5py.File(path, "w") as f:
+        f["A"] = np.arange(101)[None, :]
+    dialog = ImportDialog(path, io.inspect_file(path))
+    dialog.show()
+    app.processEvents()
+    assert dialog.downsampling.isHidden()
+    dialog.decimation.setValue(4)
+    assert not dialog.downsampling.isHidden()
+    assert dialog.downsampling.currentText() == "Polyphase FIR resampling"
+    assert dialog.temporal_options()["downsampling"] == "polyphase"
+    assert "FIR" in dialog.alias_note.text()
+    dialog.temporal_metadata = dict(samples=101, dt=.01)
+    dialog.t0.setText("0")
+    dialog.downsampling.setCurrentText("Block averaging")
+    assert "25 / 101 samples" in dialog.time_summary.text()
+    assert "block-center" in dialog.alias_note.text()
+    dialog.downsampling.setCurrentText("Simple decimation")
+    assert "26 / 101 samples" in dialog.time_summary.text()
+    assert "can alias" in dialog.alias_note.text()
+    dialog.decimation.setValue(1)
+    assert dialog.downsampling.isHidden() and dialog.alias_note.isHidden()
+    assert dialog.temporal_options() == dict(decimation=1)
+    dialog.update_import_progress(750, 1000, "Reading / resampling")
+    assert dialog.import_progress.value() == 750
+    assert "250 remaining" in dialog.progress_detail.text()
+    dialog.update_import_progress(1, 2, "Mapping")
+    assert dialog.import_progress.value() == 500
+    assert "50% remaining" in dialog.progress_detail.text()
+    dialog.failed("Read failed")
+    assert dialog.import_progress.isHidden() and dialog.load.isEnabled()
+    dialog.reject()
