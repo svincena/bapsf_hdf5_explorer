@@ -247,6 +247,8 @@ class ImportTimeDialog(W.QDialog):
                     self._history_initialized = False
                 self.metadata = meta
                 self.line.set_data(time, values)
+                if source[1] is not None:
+                    self.axis.set_title(io.channel_name(source[1]))
                 self.axis.set_ylabel(meta["units"])
                 self.axis.relim()
                 self.axis.autoscale_view(scalex=False)

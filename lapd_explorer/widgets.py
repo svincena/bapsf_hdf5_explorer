@@ -144,7 +144,11 @@ class ImportDialog(W.QDialog):
         self.channels = W.QListWidget()
         self.channels.setSelectionMode(W.QAbstractItemView.ExtendedSelection)
         for spec in info["channels"]:
-            item = W.QListWidgetItem(f"B{spec['board']} Ch{spec['channel']}  •  {spec['digitizer']} / {spec['config_name']} / {spec['adc']}")
+            description = (spec.get("data_type") or "").strip()
+            identity = f"B{spec['board']} Ch{spec['channel']}"
+            if description:
+                identity += f"  •  {description}"
+            item = W.QListWidgetItem(f"{identity}  •  {spec['digitizer']} / {spec['config_name']} / {spec['adc']}")
             item.setData(C.Qt.UserRole, spec)
             item.setToolTip(item.text())
             self.channels.addItem(item)
@@ -496,7 +500,7 @@ class ImportDialog(W.QDialog):
                 selected = self.channels.selectedItems()
                 if not 1 <= len(selected) <= 3:
                     raise ValueError("Select one, two or three digitizer channels.")
-                selections = {f"C{i+1} · B{item.data(C.Qt.UserRole)['board']} Ch{item.data(C.Qt.UserRole)['channel']}": item.data(C.Qt.UserRole)
+                selections = {io.channel_name(item.data(C.Qt.UserRole), i+1): item.data(C.Qt.UserRole)
                               for i, item in enumerate(selected)}
                 ctrl = self.motion.currentData()
                 position_source = "target" if self.position_source.currentIndex() == 0 else "measured"

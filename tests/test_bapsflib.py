@@ -4,7 +4,7 @@ import h5py
 import pytest
 from bapsflib import lapd
 from bapsflib._hdf.maps.tests import FauxHDFBuilder
-from lapd_explorer.io import guess_shots_per_case, infer_shots_from_positions, inspect_file, read_lapd
+from lapd_explorer.io import channel_name, guess_shots_per_case, infer_shots_from_positions, inspect_file, read_lapd
 
 
 def forbid_signal_reads(monkeypatch):
@@ -16,6 +16,47 @@ def forbid_signal_reads(monkeypatch):
     monkeypatch.setattr(h5py.Dataset, "__getitem__", metadata_only)
     monkeypatch.setattr(lapd.File, "read_data", lambda *args, **kwargs: pytest.fail(
         "Shot estimation must not call the signal reader"))
+
+
+@pytest.mark.parametrize("adc,channel,field", [
+    ("SIS 3302", 8, "Data type 8"),
+    ("SIS 3305", 1, "FPGA 1 Data type 1"),
+    ("SIS 3305", 5, "FPGA 2 Data type 1"),
+])
+def test_sis_descriptions_match_board_configuration_and_fpga(tmp_path, monkeypatch, adc, channel, field):
+    path = tmp_path/"descriptions.h5"
+    with FauxHDFBuilder(str(path)) as f:
+        f.add_module("SIS crate", {"n_configs": 2, "sn_size": 4, "nt": 16})
+        knobs = f.modules["SIS crate"].knobs
+        enabled = knobs.active_brdch
+        enabled[adc][1, channel-1] = True
+        knobs.active_brdch = enabled
+        knobs.active_config = ("config01", "config02")
+        root = f["Raw data + config/SIS crate"]
+        group = f"SIS crate {adc.split()[-1]} configurations"
+        root[f"config01/{group}[1]"].attrs[field] = "wrong configuration"
+        root[f"config02/{group}[0]"].attrs[field] = "wrong board"
+        attrs = root[f"config02/{group}[1]"].attrs
+        attrs[field] = np.bytes_("  Bxhf_mov_p25  ")
+    forbid_signal_reads(monkeypatch)
+    def selected():
+        info = inspect_file(path)
+        assert not info["error"]
+        return next(s for s in info["channels"] if s["adc"] == adc and
+                    s["config_name"] == "config02" and s["board"] == 2 and s["channel"] == channel)
+    spec = selected()
+    assert spec["data_type"] == "Bxhf_mov_p25"
+    assert spec["data_type_field"] == field
+    assert channel_name(spec, 1) == "C1 · Bxhf_mov_p25"
+    for value, expected in (("", f"B2 Ch{channel}"), (" \t\n ", f"B2 Ch{channel}"),
+                            ("By_μprobe", "By_μprobe"), (np.array([b"array-label"]), "array-label")):
+        with h5py.File(path, "r+") as f:
+            f[f"Raw data + config/SIS crate/config02/{group}[1]"].attrs[field] = value
+        spec = selected()
+        assert channel_name(spec) == expected
+    with h5py.File(path, "r+") as f:
+        del f[f"Raw data + config/SIS crate/config02/{group}[1]"].attrs[field]
+    assert channel_name(selected()) == f"B2 Ch{channel}"
 
 
 @pytest.mark.parametrize("digitizer", ["SIS 3301", "SIS crate", "LeCroy_scope"])

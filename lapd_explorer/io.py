@@ -36,14 +36,49 @@ def inspect_file(path):
                         for board, channel_group, info in config.get(adc, []):
                             group = (channel_group,) if np.isscalar(channel_group) else channel_group
                             for channel in group:
-                                channels.append(dict(digitizer=device, config_name=config_name,
-                                                     adc=adc, board=int(board), channel=int(channel)))
+                                spec = dict(digitizer=device, config_name=config_name,
+                                            adc=adc, board=int(board), channel=int(channel))
+                                spec.update(_sis_channel_description(f, mapper, spec))
+                                channels.append(spec)
             for name, mapper in f.controls.items():
                 if "motion" in str(mapper.contype).lower():
                     controls.extend((name, cfg) for cfg in mapper.configs)
     except Exception as exc:
         error = str(exc)
     return dict(portable=False, channels=channels, controls=controls, datasets=datasets, error=error)
+
+
+def _sis_channel_description(f, mapper, spec):
+    """Read the user-entered description from the selected SIS ADC configuration."""
+    adc = spec["adc"]
+    if adc not in ("SIS 3302", "SIS 3305"):
+        return {}
+    config = f[mapper.configs[spec["config_name"]]["config group path"]]
+    slot = mapper.get_slot(spec["board"], adc)
+    index = next((int(index) for slot_number, index in zip(
+        config.attrs["SIS crate slot numbers"], config.attrs["SIS crate config indices"])
+        if slot_number == slot), None)
+    group_name = f"SIS crate {adc.split()[-1]} configurations[{index}]"
+    if index is None or group_name not in config:
+        return {}
+    channel = spec["channel"]
+    field = (f"FPGA {(channel-1)//4+1} Data type {(channel-1)%4+1}"
+             if adc == "SIS 3305" else f"Data type {channel}")
+    value = np.asarray(config[group_name].attrs.get(field, ""))
+    if value.size != 1:
+        return {}
+    value = value.reshape(-1)[0]
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    description = value.strip() if isinstance(value, str) else ""
+    return dict(data_type=description, data_type_field=field)
+
+
+def channel_name(spec, index=None):
+    """Use a nonblank file description, with the hardware identity as fallback."""
+    description = (spec.get("data_type") or "").strip()
+    name = description or f"B{spec['board']} Ch{spec['channel']}"
+    return f"C{index} · {name}" if index is not None else name
 
 
 def infer_shots_from_positions(xyz, decimals=4):
@@ -252,6 +287,10 @@ def read_lapd(path, selections, control=None, start=0, stop=None, t0=0.0, positi
                 raise ValueError("Channel motion coordinates do not match.")
             xyz = current_xyz.copy()
             infos[name] = channel_info
+            if spec.get("data_type"):
+                infos[name]["data type"] = spec["data_type"]
+                if spec.get("data_type_field"):
+                    infos[name]["data type field"] = spec["data_type_field"]
             infos[name]["controls"] = meta["controls"]
             infos[name]["position field used"] = meta["position_field"]
             infos[name]["measured xyz"] = meta["measured"].tolist()

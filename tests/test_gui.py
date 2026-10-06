@@ -197,6 +197,81 @@ def test_scientific_double_spin_box_accepts_exponents(app):
     assert box.text() == "100"
 
 
+def test_sis_descriptions_in_import_channel_controls_and_plot_legends(app, tmp_path, monkeypatch):
+    import time
+    from PySide6 import QtCore as C
+    from bapsflib._hdf.maps.tests import FauxHDFBuilder
+    from lapd_explorer import io
+    from lapd_explorer.import_time_gui import ImportTimeDialog
+    path = tmp_path/"named-channels.h5"
+    with FauxHDFBuilder(str(path)) as f:
+        f.add_module("SIS crate", {"sn_size": 4, "nt": 16})
+        knobs = f.modules["SIS crate"].knobs
+        enabled = knobs.active_brdch
+        enabled["SIS 3302"][0, :3] = True
+        knobs.active_brdch = enabled
+        attrs = f["Raw data + config/SIS crate/config01/SIS crate 3302 configurations[0]"].attrs
+        attrs["Data type 1"] = np.bytes_(" Bxhf_mov_p25 ")
+        attrs["Data type 2"] = np.bytes_(" \t ")
+        attrs["Data type 3"] = "Bxhf_mov_p25"
+    dialog = ImportDialog(path, io.inspect_file(path))
+    dialog.show()
+    dialog.channels.clearSelection()
+    for i in range(dialog.channels.count()):
+        item = dialog.channels.item(i)
+        spec = item.data(C.Qt.UserRole)
+        if spec["adc"] == "SIS 3302":
+            item.setSelected(True)
+            assert f"B1 Ch{spec['channel']}" in item.text()
+            if spec["channel"] != 2:
+                assert "Bxhf_mov_p25" in item.text()
+    dialog.add_axis()
+    dialog.axes.cellWidget(0, 0).setCurrentText("shot")
+    dialog.axes.item(0, 1).setText("4")
+    dialog.axes.item(0, 3).setText("3")
+    previewed = []
+    def inspect_preview(preview):
+        assert "B1 Ch1" in preview.channel.itemText(0)
+        assert "Bxhf_mov_p25" in preview.channel.itemText(0)
+        preview.worker.wait()
+        app.processEvents()
+        assert preview.axis.get_title() == "Bxhf_mov_p25"
+        preview.reject()
+        previewed.append(True)
+        return W.QDialog.Rejected
+    monkeypatch.setattr(ImportTimeDialog, "exec", inspect_preview)
+    dialog.preview_time()
+    deadline = time.monotonic()+10
+    while not previewed and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(.005)
+    assert previewed, dialog.message.text()
+    dialog.begin()
+    deadline = time.monotonic()+10
+    while dialog.dataset is None and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(.005)
+    assert dialog.dataset is not None, dialog.message.text()
+    names = ["C1 · Bxhf_mov_p25", "C2 · B1 Ch2", "C3 · Bxhf_mov_p25"]
+    assert list(dialog.dataset.channels) == names
+    assert dialog.dataset.metadata[names[0]]["data type"] == "Bxhf_mov_p25"
+    saved = tmp_path/"named-processed.h5"
+    io.save_dataset(saved, dialog.dataset)
+    assert list(io.load_dataset(saved).channels) == names
+    w = MainWindow()
+    w.set_data(dialog.dataset)
+    w.show()
+    app.processEvents()
+    assert [w.components[0].itemText(i) for i in range(w.components[0].count())] == names
+    for name in names:
+        w.components[0].setCurrentText(name)
+        w.draw()
+        assert w.main_ax.get_legend().get_texts()[0].get_text() == name
+    w.grab().save(str(tmp_path/"sis-named-channel-plots.png"))
+    w.close()
+    dialog.reject()
+
+
 def test_import_dialog_applies_shot_guess_and_keeps_fields_editable(app, monkeypatch):
     info = {
         "channels": [{"digitizer": "D", "config_name": "cfg", "adc": "A",

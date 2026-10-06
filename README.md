@@ -170,6 +170,13 @@ controls through `bapsflib`. Multiple channels must have compatible record and
 time axes. Use Command-click on macOS or Ctrl-click on Windows/Linux to select
 several channels.
 
+For SIS 3302 and SIS 3305 channels, nonblank user-entered **Data type**
+descriptions become the imported channel names used in selectors and plots.
+The import and preview lists show the description alongside the board/channel
+identity. Missing or whitespace-only descriptions retain the board/channel
+name; the `C1`, `C2`, `C3` prefixes distinguish selected inputs even when their
+descriptions match. Names and descriptions are preserved in saved explorer data.
+
 ### Read fewer temporal samples
 
 Before loading, use **Read fewer temporal samples** for either BaPSF or raw
