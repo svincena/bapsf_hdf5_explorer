@@ -16,7 +16,9 @@ channels. Spectral analysis additionally requires a uniform, finite time base.
 
 ## Workflow
 
-1. In **Estimate**, choose the representative position/case/shot and interval.
+1. In **Trace**, choose the position/case/shot by axis indices, nearest spatial
+   coordinates, flat trace index, or global shot number. Click **Locations** to
+   choose a position interactively. In **Estimate**, set the analysis interval.
    Drag on either input trace, use the navigation toolbar, or edit inclusive
    times/sample indices. These selections stay synchronized.
 2. Set segment length, FFT length, overlap in samples, window, detrending, and
@@ -190,3 +192,116 @@ MP4 exporters continue to operate on the main browser dataset.
 Primary references: [SciPy Welch](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.welch.html),
 [SciPy CSD](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.csd.html),
 and [SciPy correlate](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.correlate.html).
+
+
+## Single-trace spectrograms
+
+Choose one channel for auto-power, or two channels for cross-power, then click
+**Make spectrogram**. Two-channel results also retain each channel's auto-power.
+The **Spectrogram** control tab has **Estimation** and **Display** pages. It uses
+the shared analysis interval from **Estimate / Input traces**, with one stored
+trace at the selected location, case and shot. The Welch **Average stored shots**
+option does not apply to spectrograms. Any averaging already applied in the main
+browser remains part of the input, as identified by its processing history.
+
+**Trace** provides several synchronized ways to select that time series:
+
+- Spatial coordinates snap to the nearest stored x/y/z coordinate. Axis indices
+  explicitly select the position, case and shot; they are zero-based.
+- The flat trace index uses the dataset's non-time dimension order, in C order
+  (last listed axis varies fastest). It is an index in the mapped dataset, which
+  can differ from the original digitizer row order.
+- Global shot numbers select an exact stored trace when the shot map is
+  available. Missing or ambiguous shot numbers are rejected.
+- The **Locations — click to choose** plot shows channel A at the middle of the
+  interval for the current case and shot. Clicking chooses the nearest stored
+  location. This map is available before any spectral processing. Existing
+  cached spatial spectral fields also accept location clicks.
+- The persistent **Cycle through / Previous / Next** controls browse all traces,
+  only spatial locations, only shots, or only cases. Location/shot/case cycling
+  preserves the other indices. Wrap can be disabled to stop at an endpoint.
+
+After the first calculation, **Update spectrogram when trace / settings change**
+automatically computes the new selection in a background worker. Rapid changes
+are combined into one update. The location map stays open during automatic
+updates. Turn the option off to make each calculation explicitly. Color, phase,
+frequency display and other display choices reuse cached arrays.
+
+### Estimation options and normalization
+
+- Segment length in **samples or milliseconds**, overlap in **samples or
+  percent**, and FFT length. FFT length must cover the segment; overlap must
+  be smaller than it. Zero padding gives finer frequency bins but does not
+  improve the window's intrinsic resolution. The control reports window
+  duration, hop duration and FFT bin spacing.
+- Periodic windows (default) or symmetric windows: Hann, Hamming, Blackman,
+  Blackman-Harris, Nuttall, flat top, boxcar, Bartlett, Tukey, Kaiser, Gaussian,
+  and Chebyshev. Tukey exposes α, Kaiser β, Gaussian standard deviation in
+  samples, and Chebyshev attenuation in dB.
+- Per-window mean subtraction, linear detrending, or no detrending.
+- **Density** in input-unit²/Hz or **spectrum** in input-unit². Each window
+  produces a separate periodogram; windows are not averaged together in time.
+- One-sided real-signal estimates or two-sided estimates centered on zero Hz.
+- **None — complete windows** excludes partial windows. Zero, edge-value,
+  even-reflection and odd-reflection boundary extension include windows
+  centered at the interval start and along the selected hop grid. **Pad final
+  incomplete hop** adds a final window when the grid does not fit exactly.
+  With no boundary extension, its missing trailing samples are zero-padded;
+  otherwise it uses the selected extension. Padded windows can be influenced by
+  artificial edge data, including a fully padded final window for some hops.
+- **FFT workers** controls SciPy's batched FFT threads, scoped to the background
+  analysis job. Temporary window/FFT batches are bounded; cancel is checked
+  between batches and progress reports completed and remaining windows.
+
+For the windowed FFTs `A_j(f)` and `B_j(f)`, each time column stores
+
+```
+P_AA(f,j) = d * |A_j(f)|² / normalization
+P_BB(f,j) = d * |B_j(f)|² / normalization
+P_AB(f,j) = d * conj(A_j(f)) * B_j(f) / normalization
+```
+
+The normalization is `fs * sum(w²)` for density and `|sum(w)|²` for spectrum.
+For one-sided estimates, `d=2` except at DC and an even FFT's Nyquist bin;
+for two-sided estimates `d=1`. Positive cross-phase means B leads A, preserving
+the existing CSD convention. Complete-window estimates averaged over time agree
+with mean Welch/CSD for the same settings. No coherence estimate is implied by a
+single unsmoothed time-frequency window.
+
+Time coordinates identify the central sample, `floor(segment_samples/2)`, of
+each window, using the imported time origin. This follows the ShortTimeFFT
+sample-center convention; for odd-length segments it is half a sample earlier
+than the legacy SciPy spectrogram timestamp. Padding can put centers beyond the
+selected interval's endpoint. Frequency and time arrays stay explicit.
+
+Only the selected trace(s) are transformed. Results have a 256 MiB allocation
+limit; requests exceeding it explain how to reduce FFT length, overlap, or the
+interval. This limit is for stored numerical results, not total plot memory.
+The current result replaces the previous trace result, rather than accumulating
+a full location × shot × case × time × frequency cube.
+
+### Display and saving
+
+Select auto-power A/B or cross-power. Cross-power offers magnitude, phase, real,
+imaginary, and magnitude squared representations; phase may use degrees or
+radians. Undefined phase at zero cross-power is masked. Color options include
+linear, logarithmic, symmetric log (with threshold), and dB scales; reference
+power, dB dynamic range, colormap, and automatic or fixed color limits are
+editable. Signed and phase displays use linear or symmetric-log color, rather
+than taking logarithms of signed values. Power dB is `10 log10(P/reference)`;
+the reference uses the selected quantity's units. Display clipping does not
+alter stored estimates. Frequency limits and a logarithmic frequency axis are
+available; the latter requires a one-sided result and excludes DC.
+
+The plot toolbar supports zoom, pan, and image export. **Save spectrogram data…**
+creates an NPZ archive containing `time` (seconds), `frequency` (Hz),
+`Auto_power_A`, and, for two channels, `Auto_power_B` and complex `Cross_power`.
+Its JSON `metadata` records channel names, trace index, coordinates, global shot,
+units, source, preprocessing history, estimator settings, and the phase/time
+conventions. It can be loaded with `numpy.load(path, allow_pickle=False)`.
+Saving is atomic and does not replace the main browser dataset.
+
+The estimator uses SciPy window, detrending, and FFT primitives, with numerical
+checks against [SciPy spectrogram](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.spectrogram.html),
+[ShortTimeFFT](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.ShortTimeFFT.html),
+and [CSD](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.csd.html).

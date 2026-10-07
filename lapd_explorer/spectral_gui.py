@@ -6,6 +6,9 @@ import numpy as np
 from PySide6 import QtCore as C, QtWidgets as W
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from . import spectral as analysis, plotting
+from . import spectrogram
+from .spectrogram_gui import Controls as SpectrogramControls
+from .trace_picker import TracePicker
 from .appearance import FacilityLogo, colors
 from .langmuir_gui import IntervalEditor, TraceView
 from .widgets import ScientificDoubleSpinBox, Worker, combo, spin, form_layout
@@ -31,6 +34,12 @@ class SpectralDialog(W.QDialog):
         self.settings, self.appearance = settings, appearance
         self.batch = self.point = self.worker = None
         self.point_index = None
+        self.spectrogram_result = None
+        self._spectrogram_requested = False
+        self.spectrogram_timer = C.QTimer(self)
+        self.spectrogram_timer.setSingleShot(True)
+        self.spectrogram_timer.setInterval(250)
+        self.spectrogram_timer.timeout.connect(lambda: self.process_spectrogram(show=False))
         self.cancel_event = threading.Event()
         self._render_key = None
         self._animation_frames = None
@@ -51,7 +60,7 @@ class SpectralDialog(W.QDialog):
         note = W.QLabel(description + (" · Vector components" if vector else " · Scalar inputs") +
                         "\nUses the browser's currently processed data. " + (" → ".join(data.history) or "Original data") +
                         "\nS_AB = conj(A) × B; positive cross-phase means B leads A. "
-                        "PSD is one-sided density; covariance has a separate lag axis.")
+                        "Welch PSD uses one-sided density; covariance has a separate lag axis.")
         note.setWordWrap(True)
         layout.addWidget(note)
         split = W.QSplitter()
@@ -65,12 +74,9 @@ class SpectralDialog(W.QDialog):
         self.control_tabs.setMinimumWidth(315)
         self.control_tabs.addTab(scroll, "Estimate")
         split.addWidget(self.control_tabs)
-        self.indices = {}
-        for d in data.dims[:-1]:
-            widget = spin(0, len(data.coords[d])-1, min(selection.get(d, 0), len(data.coords[d])-1))
-            self.indices[d] = widget
-            form.addRow(f"{d} index", widget)
-            widget.valueChanged.connect(self.selection_changed)
+        self.trace_picker = TracePicker(data, selection, self)
+        self.indices = self.trace_picker.indices
+        self.trace_picker.changed.connect(self.selection_changed)
         self.location = W.QLabel()
         self.location.setWordWrap(True)
         form.addRow(self.location)
@@ -188,6 +194,27 @@ class SpectralDialog(W.QDialog):
         animation_scroll.setWidgetResizable(True)
         animation_scroll.setWidget(animation)
         self.control_tabs.addTab(animation_scroll, "Animate")
+        trace_scroll = W.QScrollArea()
+        trace_scroll.setWidgetResizable(True)
+        trace_scroll.setWidget(self.trace_picker)
+        self.control_tabs.addTab(trace_scroll, "Trace")
+        self.spectrogram_controls = SpectrogramControls(self.fs, len(data.coords["time"]), names)
+        self.spectrogram_controls.export.setEnabled(False)
+        spectrogram_scroll = W.QScrollArea()
+        spectrogram_scroll.setWidgetResizable(True)
+        spectrogram_scroll.setWidget(self.spectrogram_controls)
+        self.control_tabs.addTab(spectrogram_scroll, "Spectrogram")
+        self.spectrogram_fig, self.spectrogram_canvas, self.spectrogram_toolbar = self.plot_tab("Spectrogram")
+        self.spectrogram_tab = self.tabs.count()-1
+        if data.spatial_dims:
+            self.location_fig, self.location_canvas, self.location_toolbar = self.plot_tab("Locations — click to choose")
+            self.location_canvas.mpl_connect("button_press_event", self.location_clicked)
+        self.spectrogram_controls.estimate_changed.connect(self.spectrogram_settings_changed)
+        self.spectrogram_controls.display_changed.connect(self.draw_spectrogram)
+        self.spectrogram_controls.export_requested.connect(self.export_spectrogram)
+        self.spectrogram_controls.auto_update.toggled.connect(self.schedule_spectrogram)
+        self.tabs.currentChanged.connect(self.plot_tab_changed)
+        layout.addWidget(self.trace_picker.navigation)
         self.message = W.QLabel()
         self.message.setWordWrap(True)
         layout.addWidget(self.message)
@@ -199,12 +226,17 @@ class SpectralDialog(W.QDialog):
             button.clicked.connect(callback)
             buttons.addWidget(button)
             self.action_buttons.append(button)
+        self.spectrogram_button = W.QPushButton("Make spectrogram")
+        self.spectrogram_button.clicked.connect(lambda: self.process_spectrogram())
+        buttons.insertWidget(2, self.spectrogram_button)
+        self.action_buttons.append(self.spectrogram_button)
+        self.trace_picker.failed.connect(self.message.setText)
         self.cancel_button = W.QPushButton("Cancel processing")
         self.cancel_button.setEnabled(False)
         self.cancel_button.clicked.connect(self.cancel_event.set)
         buttons.addWidget(self.cancel_button)
         layout.addLayout(buttons)
-        self.progress.connect(lambda n, total: self.message.setText(f"Processed {n:,} / {total:,} locations/shots…"))
+        self.progress.connect(self.processing_progress)
         self.trace_view.selected.connect(self.editor.set_interval)
         self.editor.changed.connect(self.window_changed)
         for widget in (self.nperseg, self.nfft, self.overlap, self.max_lag):
@@ -287,7 +319,7 @@ class SpectralDialog(W.QDialog):
         self.trace_view.traces(traces[0], traces[-1])
         self.trace_view.set_interval(self.editor.interval())
         if "shot" in self.indices:
-            self.indices["shot"].setEnabled(not self.average_shots.isChecked())
+            self.indices["shot"].setEnabled(True)
         description = ", ".join(f"{d}={self.data.coords[d][w.value()]:g}" for d, w in self.indices.items()
                                 if d != "shot" or not self.average_shots.isChecked())
         if self.average_shots.isChecked():
@@ -298,6 +330,174 @@ class SpectralDialog(W.QDialog):
         self._render_key = None
         self.draw_spectrum()
         self.draw_results()
+        self.draw_locations()
+        self.invalidate_spectrogram()
+
+    def processing_progress(self, done, total):
+        unit = "windows" if getattr(self, "_job_kind", "spectrum") == "spectrogram" else "locations/shots"
+        self.message.setText(f"Processed {done:,} / {total:,} {unit} · {total-done:,} remaining…")
+
+    def plot_tab_changed(self, value):
+        if value == self.spectrogram_tab:
+            self.control_tabs.setCurrentIndex(4)
+
+    def spectrogram_settings_changed(self):
+        self.spectrogram_result = None
+        self.draw_spectrogram()
+        self.schedule_spectrogram()
+
+    def invalidate_spectrogram(self):
+        result = self.spectrogram_result
+        if result is not None and (result.index != self.index() or
+                                  result.settings != self.spectrogram_controls.settings(self.editor.interval())):
+            self.spectrogram_result = None
+            self.draw_spectrogram()
+        self.schedule_spectrogram()
+
+    def schedule_spectrogram(self, *args):
+        if (self._spectrogram_requested and self.spectrogram_result is None
+                and self.spectrogram_controls.auto_update.isChecked()
+                and not (self.worker and self.worker.isRunning()) and self.isVisible()):
+            self.spectrogram_timer.start()
+        else:
+            self.spectrogram_timer.stop()
+
+    def process_spectrogram(self, *, show=True):
+        if self.worker and self.worker.isRunning():
+            return
+        self.spectrogram_timer.stop()
+        try:
+            self.trace_view.flush_limits()
+            settings = self.spectrogram_controls.settings(self.editor.interval())
+            index = self.index()
+            spectrogram.validate(self.data, self.names, settings, index)
+        except ValueError as exc:
+            self.message.setText(str(exc))
+            return
+        self._spectrogram_requested = True
+        self._spectrogram_show_on_ready = show
+        self.stop_play()
+        self.cancel_event.clear()
+        self._job_kind = "spectrogram"
+        self.control_tabs.setEnabled(False)
+        self.tabs.setEnabled(False)
+        for button in self.action_buttons:
+            button.setEnabled(False)
+        self.cancel_button.setEnabled(True)
+        self.message.setText("Computing the selected trace's spectrogram…")
+        self.worker = Worker(lambda: spectrogram.process(self.data, self.names, settings, index,
+                                                        self.progress.emit, self.cancel_event.is_set), self)
+        self.worker.result.connect(self.spectrogram_ready)
+        self.worker.failed.connect(self.spectrogram_failed)
+        self.worker.finished.connect(self.job_finished)
+        self.worker.start()
+
+    def spectrogram_failed(self, message):
+        # Invalid settings and canceled work wait for an explicit retry.
+        self._spectrogram_requested = False
+        self.message.setText(message)
+
+    def spectrogram_ready(self, result):
+        if (result.index != self.index() or
+                result.settings != self.spectrogram_controls.settings(self.editor.interval())):
+            return
+        self.spectrogram_result = result
+        if self.spectrogram_controls.sides.currentIndex() == 1 and self.spectrogram_controls.frequency_min.value() == 0:
+            self.spectrogram_controls.frequency_min.blockSignals(True)
+            self.spectrogram_controls.frequency_min.setValue(result.frequency[0])
+            self.spectrogram_controls.frequency_min.blockSignals(False)
+        if result.settings.sides == "onesided" and self.spectrogram_controls.frequency_min.value() < 0:
+            self.spectrogram_controls.frequency_min.blockSignals(True)
+            self.spectrogram_controls.frequency_min.setValue(0)
+            self.spectrogram_controls.frequency_min.blockSignals(False)
+        self.draw_spectrogram()
+        if getattr(self, "_spectrogram_show_on_ready", True):
+            self.tabs.setCurrentIndex(self.spectrogram_tab)
+        self.message.setText(f"Spectrogram: {len(result.time):,} windows × {len(result.frequency):,} frequency bins. "
+                             "Display changes use cached results; trace cycling updates automatically when enabled.")
+
+    def draw_spectrogram(self, *args):
+        if not hasattr(self, "spectrogram_canvas"):
+            return
+        self.spectrogram_controls.export.setEnabled(self.spectrogram_result is not None)
+        if self.spectrogram_result is None:
+            self.spectrogram_fig.clear()
+            ax = self.spectrogram_fig.add_subplot(111)
+            plotting.style(ax, colors(self.appearance))
+            ax.set_axis_off()
+            ax.text(.5, .5, "Select a trace, set the interval, then choose Make spectrogram.", ha="center", va="center", transform=ax.transAxes, color=colors(self.appearance)["fg"])
+            self.spectrogram_canvas.draw_idle()
+            return
+        try:
+            self.spectrogram_controls.render(self.spectrogram_result, self.spectrogram_fig, self.appearance)
+            self.spectrogram_toolbar.update()
+            self.spectrogram_canvas.draw_idle()
+        except ValueError as exc:
+            self.message.setText(str(exc))
+
+    def export_spectrogram(self):
+        if self.spectrogram_result is None:
+            self.message.setText("Make a spectrogram before saving its data.")
+            return
+        path, _ = W.QFileDialog.getSaveFileName(self, "Save spectrogram data", "spectrogram.npz", "NumPy archive (*.npz)")
+        if not path:
+            return
+        if not path.lower().endswith(".npz"):
+            path += ".npz"
+        try:
+            from .app import atomic_save
+            atomic_save(path, lambda temporary: spectrogram.save(temporary, self.spectrogram_result))
+            self.message.setText(f"Saved spectrogram data to {path}")
+        except (OSError, ValueError) as exc:
+            self.message.setText(str(exc))
+
+    def draw_locations(self):
+        if not hasattr(self, "location_canvas"):
+            return
+        self.location_fig.clear()
+        self.location_fig.set_facecolor(colors(self.appearance)["bg"])
+        self.location_ax = ax = self.location_fig.add_subplot(111)
+        plotting.style(ax, colors(self.appearance))
+        case = self.indices["case"].value() if "case" in self.indices else 0
+        shot = self.indices["shot"].value() if "shot" in self.indices else 0
+        middle = np.mean(self.editor.interval())
+        sample = int(np.argmin(abs(self.data.coords["time"]-middle)))
+        values = self.data.selected(self.names[0], case, shot)[..., sample]
+        dims = self.data.spatial_dims
+        if len(dims) == 2:
+            y, x = (self.data.coords[d] for d in dims)
+            # Singleton spatial axes need an explicit drawable cell width.
+            def edges(v):
+                return (v[0]-.5, v[0]+.5) if len(v) == 1 else (v[0]-(v[1]-v[0])/2, v[-1]+(v[-1]-v[-2])/2)
+            if len(x) > 1 and len(y) > 1:
+                image = ax.pcolormesh(x, y, values, shading="nearest", cmap=self.cmap.currentText())
+            else:
+                image = ax.imshow(values, origin="lower", aspect="auto", extent=(*edges(x), *edges(y)), cmap=self.cmap.currentText())
+            bar = self.location_fig.colorbar(image, ax=ax, label=self.data.units)
+            plotting.style(bar.ax, colors(self.appearance))
+            ax.plot(x[self.indices[dims[1]].value()], y[self.indices[dims[0]].value()], marker="o", ms=10, mec="white", mfc="none", mew=2)
+            ax.set(xlabel=f"{dims[1]} ({self.data.spatial_units})", ylabel=f"{dims[0]} ({self.data.spatial_units})")
+        else:
+            d = dims[0]
+            ax.plot(self.data.coords[d], values)
+            ax.axvline(self.data.coords[d][self.indices[d].value()], ls="--")
+            ax.set(xlabel=f"{d} ({self.data.spatial_units})", ylabel=f"{self.names[0]} ({self.data.units})")
+        ax.set_title(f"Click a location · {self.names[0]} at {self.data.coords['time'][sample]*1000:g} ms\n"
+                     f"case index {case} · shot index {shot}")
+        self.location_toolbar.update()
+        self.location_canvas.draw_idle()
+
+    def location_clicked(self, event):
+        if event.inaxes != getattr(self, "location_ax", None) or self.location_toolbar.mode or event.xdata is None:
+            return
+        dims = self.data.spatial_dims
+        positions = [event.ydata, event.xdata] if len(dims) == 2 else [event.xdata]
+        index = list(self.index())
+        for d, value in zip(dims, positions):
+            if value is None or not np.isfinite(value):
+                return
+            index[self.data.dims.index(d)] = int(np.argmin(abs(self.data.coords[d]-value)))
+        self.trace_picker.set_index(index)
 
     def current_result(self):
         return self.batch or (self.point if self.point_index == self.index() else None)
@@ -310,7 +510,9 @@ class SpectralDialog(W.QDialog):
             self.message.setText(str(exc))
             return
         self.stop_play()
+        self.spectrogram_timer.stop()
         self.cancel_event.clear()
+        self._job_kind = "spectrum"
         self.control_tabs.setEnabled(False)
         self.tabs.setEnabled(False)
         for button in self.action_buttons:
@@ -337,6 +539,7 @@ class SpectralDialog(W.QDialog):
         for button in self.action_buttons:
             button.setEnabled(True)
         self.cancel_button.setEnabled(False)
+        self.schedule_spectrogram()
 
     def point_ready(self, result):
         self.point, self.point_index = result, self.index()
@@ -504,8 +707,12 @@ class SpectralDialog(W.QDialog):
             return
         dims = self.data.spatial_dims
         positions = [event.ydata, event.xdata] if len(dims) == 2 else [event.xdata]
+        index = list(self.index())
         for d, value in zip(dims, positions):
-            self.indices[d].setValue(int(np.argmin(abs(self.data.coords[d]-value))))
+            if value is None or not np.isfinite(value):
+                return
+            index[self.data.dims.index(d)] = int(np.argmin(abs(self.data.coords[d]-value)))
+        self.trace_picker.set_index(index)
 
     def prepare_animation(self):
         if self.batch is None:
@@ -600,6 +807,8 @@ class SpectralDialog(W.QDialog):
         self._render_key = None
         self.draw_spectrum()
         self.draw_results()
+        self.draw_locations()
+        self.draw_spectrogram()
 
     def update_appearance(self, appearance):
         self.appearance = appearance
@@ -613,11 +822,15 @@ class SpectralDialog(W.QDialog):
         self._render_key = None
         self.draw_spectrum()
         self.draw_results()
+        self.draw_locations()
+        self.draw_spectrogram()
 
     def reject(self):
         if self.worker is not None and self.worker.isRunning():
             self.message.setText("Cancel processing or wait for it to finish before exiting.")
             return
         self.stop_play()
+        self.spectrogram_timer.stop()
         self.collect()
+        self.spectrogram_timer.stop()
         super().reject()

@@ -424,7 +424,12 @@ Assign one or two channels with the existing component selectors, set unused
 components to **None**, and open **Spectral Analysis…**. The tool uses the
 currently processed dataset and preserves spatial geometry, cases, and stored
 shots. It provides Welch auto/cross-power, coherency, coherence, cross-phase,
-lag-domain covariance, and scalar/vector animations.
+lag-domain covariance, scalar/vector animations, and single-trace auto/cross-power
+spectrograms. Use **Trace** to select spatial coordinates, axis/flat indices, or a
+global shot, or click the **Locations** plot. The persistent **Previous/Next**
+controls cycle through traces, locations, shots, or cases. **Make spectrogram**
+opens a time-frequency view with separate estimation and display options; saved
+NPZ files preserve complex cross-power and all trace/settings metadata.
 
 See [Spectral Analysis](docs/spectral.md) for the complete workflow,
 normalization, sign conventions, shot averaging, and amplitude interpretation.
