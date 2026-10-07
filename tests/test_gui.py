@@ -17,6 +17,25 @@ def app():
     yield a
 
 
+def test_colormap_catalog_previews_and_reversed_colors(app):
+    from matplotlib import colormaps
+    from PySide6 import QtCore as C
+    from lapd_explorer.colormaps import COLORMAPS
+    from lapd_explorer.widgets import colormap_combo
+    selector = colormap_combo()
+    assert selector.currentText() == "viridis"
+    assert len(set(COLORMAPS)) == len(COLORMAPS)
+    for index, name in enumerate(COLORMAPS):
+        assert not selector.itemIcon(index).isNull()
+        assert selector.itemData(index, C.Qt.ToolTipRole)
+        if not name.endswith("_r"):
+            np.testing.assert_allclose(colormaps[name](np.array([0., 1.])),
+                                       colormaps[name + "_r"](np.array([1., 0.])))
+    left = selector.itemIcon(0).pixmap(64, 14).toImage()
+    reversed_left = selector.itemIcon(1).pixmap(64, 14).toImage()
+    assert left.pixelColor(0, 7) != reversed_left.pixelColor(0, 7)
+
+
 def test_gui_linked_slices_processing_point_line_and_movie(app, tmp_path):
     w = MainWindow()
     w.show()
@@ -30,11 +49,13 @@ def test_gui_linked_slices_processing_point_line_and_movie(app, tmp_path):
     w.mode.setCurrentText("Vector")
     w.draw()
     assert w._values.shape == (25, 31, 160)
-    w.cmap.setCurrentText("plasma")
-    w.arrow_cmap.setCurrentText("cividis")
+    w.cmap.setCurrentText("YlGnBu_r")
+    w.arrow_cmap.setCurrentText("twilight_shifted")
     w.draw()
-    assert w.main_ax.collections[0].cmap.name == "plasma"
-    assert w.main_ax.collections[1].cmap.name == "cividis"
+    assert w.main_ax.collections[0].cmap.name == "YlGnBu_r"
+    assert w.main_ax.collections[1].cmap.name == "twilight_shifted"
+    assert w.options()["cmap"] == "YlGnBu_r"
+    assert w.options()["arrow_cmap"] == "twilight_shifted"
     w.frame.setValue(1)
     w.draw()
     expected = np.hypot(w.data.selected("Bx")[...,1], w.data.selected("By")[...,1])
@@ -281,7 +302,7 @@ def test_import_dialog_applies_shot_guess_and_keeps_fields_editable(app, monkeyp
     }
     monkeypatch.setattr(
         "lapd_explorer.widgets.io.guess_shots_per_case",
-        lambda *args: {"shots_per_case": 5, "spatial_points": 2601,
+        lambda *args, **kwargs: {"shots_per_case": 5, "spatial_points": 2601,
                        "spatial_shape": (51, 51), "records": 13005,
                        "position_field": "xyz_target"},
     )

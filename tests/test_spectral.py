@@ -265,6 +265,10 @@ def test_gui_geometry_cached_views_intervals_and_animation(app, tmp_path, monkey
     def no_fft(*args, **kwargs):
         pytest.fail("Display changes must not recalculate spectra")
     monkeypatch.setattr(sp.signal, "welch", no_fft)
+    dialog.cmap.setCurrentText("PuOr_r")
+    if len(data.spatial_dims) == 2:
+        assert dialog.result_ax.collections[0].cmap.name == "PuOr_r"
+        assert dialog.location_ax.collections[0].cmap.name == "PuOr_r"
     for q in result.quantities:
         dialog.quantity.setCurrentText(q)
         dialog.draw_spectrum()

@@ -120,6 +120,10 @@ def test_dialog_intervals_offset_persistence_and_cached_results(tmp_path):
         dialog.editor.set_interval(tuple(data.coords["time"][[0, -1]]))
         batch = lp.process_all(data, settings)
         dialog.batch_ready(batch)
+        dialog.cmap.setCurrentText("BrBG_r")
+        assert dialog.batch is batch
+        if len(data.spatial_dims) == 2:
+            assert dialog.result_ax.collections[0].cmap.name == "BrBG_r"
         for name in lp.QUANTITIES:
             dialog.quantity.setCurrentText(name)
             assert dialog.batch is batch

@@ -260,6 +260,9 @@ def test_gui_worker_cached_displays_live_cycling_and_controls(app, tmp_path, mon
     for kind in ("Phase", "Real", "Imaginary", "Magnitude"):
         controls.representation.setCurrentText(kind)
         assert dialog.spectrogram_result is first
+    controls.cmap.setCurrentText("twilight_r")
+    assert controls.last_image.cmap.name == "twilight_r"
+    assert dialog.spectrogram_result is first
     assert len(observed) == 1
     controls.quantity.setCurrentText("Auto-power A")
     controls.color_scale.setCurrentText("Logarithmic")

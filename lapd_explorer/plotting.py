@@ -5,10 +5,9 @@ from matplotlib.colors import Normalize
 from matplotlib import patheffects
 from .model import quantity, spectrum
 from .appearance import colors
+from .colormaps import COLORMAPS
 
 BG, PANEL, FG, MUTED, ACCENT = (colors()[key] for key in ("bg", "panel", "fg", "muted", "accent"))
-COLORMAPS = ["viridis", "plasma", "inferno", "magma", "cividis", "turbo",
-             "RdBu_r", "coolwarm", "Spectral", "seismic", "gray", "Greys"]
 TIME_UNITS = {"s": 1, "ms": 1e3, "µs": 1e6, "ns": 1e9}
 
 

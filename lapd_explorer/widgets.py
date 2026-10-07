@@ -1,5 +1,7 @@
 """Shared Qt controls, workers, and acquisition/import dialogs."""
+import threading
 from PySide6 import QtCore as C, QtGui as G, QtWidgets as W
+from .cancellation import ImportCanceled, check_canceled
 from . import io
 from .temporal import DOWNSAMPLING_METHODS, retained_samples
 from .appearance import FacilityLogo
@@ -9,16 +11,30 @@ class Worker(C.QThread):
     result = C.Signal(object)
     failed = C.Signal(str)
     progress = C.Signal(float, float, str)
+    aborted = C.Signal()
 
-    def __init__(self, fn, parent=None):
+    def __init__(self, fn, parent=None, *, canceled=None):
         super().__init__(parent)
         self.fn = fn
+        self._canceled = canceled
 
     def run(self):
         try:
-            self.result.emit(self.fn())
+            check_canceled(self._canceled)
+            result = self.fn()
+            check_canceled(self._canceled)
+            self.result.emit(result)
+        except ImportCanceled:
+            self.aborted.emit()
         except Exception as exc:
-            self.failed.emit(f"{type(exc).__name__}: {exc}")
+            if self._canceled is not None and self._canceled():
+                self.aborted.emit()
+            else:
+                self.failed.emit(f"{type(exc).__name__}: {exc}")
+        finally:
+            if self._canceled is not None:
+                self.fn = None
+
 
 
 def combo(items):
@@ -29,6 +45,32 @@ def combo(items):
     widget.setMinimumContentsLength(10)
     widget.setSizePolicy(W.QSizePolicy.Expanding, W.QSizePolicy.Fixed)
     widget.addItems(items)
+    return widget
+
+
+def colormap_combo(default="viridis", *, solid=False):
+    """One palette catalog and gradient previews for every colorbar selector."""
+    import numpy as np
+    from matplotlib import colormaps
+    from .colormaps import COLORMAPS, COLORMAP_TOOLTIPS
+    widget = combo((["Solid white"] if solid else []) + COLORMAPS)
+    widget.setIconSize(C.QSize(64, 14))
+    widget.setMaxVisibleItems(16)
+    widget.setToolTip("Choose a color map. Gradient previews run from low to high; _r reverses the colors. Hover over a choice for its intended use.")
+    for index in range(widget.count()):
+        name = widget.itemText(index)
+        if name == "Solid white":
+            pixmap = G.QPixmap(96, 14)
+            pixmap.fill(C.Qt.white)
+            tooltip = "Uniform white arrows without a magnitude colorbar."
+        else:
+            rgba = colormaps[name](np.linspace(0, 1, 96), bytes=True)
+            image = G.QImage(rgba.data, 96, 1, rgba.strides[0]*96, G.QImage.Format_RGBA8888).copy()
+            pixmap = G.QPixmap.fromImage(image).scaled(96, 14)
+            tooltip = COLORMAP_TOOLTIPS[name]
+        widget.setItemIcon(index, G.QIcon(pixmap))
+        widget.setItemData(index, tooltip, C.Qt.ToolTipRole)
+    widget.setCurrentText(default)
     return widget
 
 
@@ -117,6 +159,8 @@ class ImportDialog(W.QDialog):
         self.guess_pending = False
         self.preview_worker = None
         self.temporal_metadata = None
+        self.cancel_event = threading.Event()
+        self._closing = self._accept_pending = False
         self.setWindowTitle("Import acquisition")
         self.resize(1020, 780)
         layout = W.QVBoxLayout(self)
@@ -279,6 +323,7 @@ class ImportDialog(W.QDialog):
         layout.addWidget(self.message)
         layout.addStretch()
         buttons = W.QDialogButtonBox(W.QDialogButtonBox.Cancel)
+        self.cancel_button = buttons.button(W.QDialogButtonBox.Cancel)
         self.load = buttons.addButton("Load acquisition", W.QDialogButtonBox.AcceptRole)
         self.load.clicked.connect(self.begin)
         buttons.rejected.connect(self.reject)
@@ -371,6 +416,8 @@ class ImportDialog(W.QDialog):
             self.time_summary.setText(str(exc))
 
     def preview_time(self):
+        if self._closing or self._accept_pending:
+            return
         try:
             if self.preview_worker and self.preview_worker.isRunning():
                 return
@@ -394,6 +441,8 @@ class ImportDialog(W.QDialog):
             self.load.setEnabled(False)
             self.message.setText("Reading time and record metadata for one preview channel…")
             def ready(metadata):
+                if self._closing or self._accept_pending:
+                    return
                 self.preview_worker.wait()
                 try:
                     self.temporal_metadata = metadata
@@ -415,24 +464,30 @@ class ImportDialog(W.QDialog):
                     self.preview_button.setEnabled(True)
                     self.load.setEnabled(True)
             def failed(message):
+                if self._closing or self._accept_pending:
+                    return
                 self.preview_button.setEnabled(True)
                 self.load.setEnabled(True)
                 self.message.setText(message)
             self.preview_worker = Worker(lambda: io.import_metadata(self.path, spec=sources[0][1],
-                                         dataset_path=sources[0][2], **kwargs), self)
+                                         dataset_path=sources[0][2], canceled=self.cancel_event.is_set, **kwargs), self,
+                                         canceled=self.cancel_event.is_set)
             self.preview_worker.result.connect(ready)
             self.preview_worker.failed.connect(failed)
+            self.preview_worker.finished.connect(self.workers_finished)
             self.preview_worker.start()
         except Exception as exc:
             self.failed(str(exc))
 
     def request_guess(self, *args):
         """Debounce inputs that change the inferred acquisition layout."""
-        if self.tabs.currentIndex() == 0 and self.load.isEnabled() and self.preview_button.isEnabled():
+        if not self._closing and self.tabs.currentIndex() == 0 and self.load.isEnabled() and self.preview_button.isEnabled():
             self.cases.setValue(1)
             self.guess_timer.start()
 
     def start_guess(self):
+        if self._closing or not self.load.isEnabled() or not self.preview_button.isEnabled():
+            return
         if self.guess_worker and self.guess_worker.isRunning():
             self.guess_pending = True
             return
@@ -449,9 +504,9 @@ class ImportDialog(W.QDialog):
         self.message.setText("Estimating spatial points and shots from the selected channel…")
         self.guess_worker = Worker(
             lambda: io.guess_shots_per_case(
-                self.path, spec, control, start, stop, source, decimals
+                self.path, spec, control, start, stop, source, decimals, canceled=self.cancel_event.is_set
             ),
-            self,
+            self, canceled=self.cancel_event.is_set,
         )
         self.guess_worker.result.connect(self.guess_ready)
         self.guess_worker.failed.connect(self.guess_failed)
@@ -459,6 +514,8 @@ class ImportDialog(W.QDialog):
         self.guess_worker.start()
 
     def guess_ready(self, guess):
+        if self._closing or self._accept_pending:
+            return
         self.cases.setValue(1)
         self.repeats.setValue(guess["shots_per_case"])
         if not self.load.isEnabled():
@@ -472,13 +529,16 @@ class ImportDialog(W.QDialog):
         )
 
     def guess_failed(self, message):
+        if self._closing or self._accept_pending:
+            return
         self.message.setText(
             f"Could not infer shots automatically: {message} Enter the number of "
             "cases and shots per case manually."
         )
 
     def guess_finished(self):
-        if self.guess_pending:
+        self.workers_finished()
+        if not self._closing and not self._accept_pending and self.guess_pending:
             self.guess_pending = False
             self.guess_timer.start()
 
@@ -503,6 +563,9 @@ class ImportDialog(W.QDialog):
         self.axes.setFixedHeight(height + 2*self.axes.frameWidth())
 
     def begin(self):
+        if self._closing or self._accept_pending or self.worker and self.worker.isRunning():
+            return
+        self.cancel_event.clear()
         try:
             axes = [(self.axes.cellWidget(r, 0).currentText(), int(self.axes.item(r, 1).text()),
                      float(self.axes.item(r, 2).text()), float(self.axes.item(r, 3).text()))
@@ -519,7 +582,7 @@ class ImportDialog(W.QDialog):
                 paths = {f"C{i+1} · {item.data(C.Qt.UserRole).split('/')[-1]}": item.data(C.Qt.UserRole)
                          for i, item in enumerate(selected)}
                 dt, units = float(self.dt.text()), self.raw_units.text()
-                fn = lambda: io.read_raw(self.path, paths, axes, dt, t0, spatial_units, units, progress=report, **temporal_options)
+                fn = lambda: io.read_raw(self.path, paths, axes, dt, t0, spatial_units, units, progress=report, canceled=self.cancel_event.is_set, **temporal_options)
             else:
                 selected = self.channels.selectedItems()
                 if not 1 <= len(selected) <= 3:
@@ -537,9 +600,9 @@ class ImportDialog(W.QDialog):
                     raise ValueError("Stop record must be greater than first record.")
                 def fn():
                     rec = io.read_lapd(self.path, selections, ctrl if use_motion else None, start, stop, t0, position_source,
-                                       progress=report, **temporal_options)
-                    return (io.map_motion(rec, cases, repeats, order, decimals, progress=report) if use_motion
-                            else io.map_manual(rec, axes, spatial_units, progress=report))
+                                       progress=report, canceled=self.cancel_event.is_set, **temporal_options)
+                    return (io.map_motion(rec, cases, repeats, order, decimals, progress=report, canceled=self.cancel_event.is_set) if use_motion
+                            else io.map_manual(rec, axes, spatial_units, progress=report, canceled=self.cancel_event.is_set))
             self.load.setEnabled(False)
             self.preview_button.setEnabled(False)
             self.guess_timer.stop()
@@ -550,15 +613,18 @@ class ImportDialog(W.QDialog):
             self.import_progress.setVisible(True)
             self.progress_detail.setText("Preparing acquisition…")
             self.progress_detail.setVisible(True)
-            self.worker = Worker(fn, self)
+            self.worker = Worker(fn, self, canceled=self.cancel_event.is_set)
             self.worker.progress.connect(self.update_import_progress)
             self.worker.result.connect(self.loaded)
             self.worker.failed.connect(self.failed)
+            self.worker.finished.connect(self.workers_finished)
             self.worker.start()
         except Exception as exc:
             self.failed(str(exc))
 
     def update_import_progress(self, done, total, stage):
+        if self._closing or self._accept_pending:
+            return
         fraction = min(1., max(0., done / total)) if total else 0.
         self.import_progress.setValue(round(fraction*1000))
         phase = 2 if stage == "Mapping" else 1
@@ -570,26 +636,51 @@ class ImportDialog(W.QDialog):
         self.progress_detail.setText(f"{stage}: {detail}")
 
     def loaded(self, data):
+        if self._closing or self.cancel_event.is_set():
+            return
         self.dataset = data
-        self.worker.wait()
-        if self.guess_worker and self.guess_worker.isRunning():
-            self.guess_worker.wait()
-        self.accept()
+        self._accept_pending = True
+        self.guess_timer.stop()
+        self.guess_pending = False
+        # Stop auxiliary metadata work without blocking the GUI thread. A
+        # Cancel click during this cleanup still discards the completed result.
+        self.cancel_event.set()
+        self.workers_finished()
 
     def failed(self, message):
+        if self._closing or self._accept_pending:
+            return
         self.import_progress.setVisible(False)
         self.progress_detail.setVisible(False)
         self.message.setText(message)
         self.load.setEnabled(True)
         self.preview_button.setEnabled(True)
 
-    def reject(self):
-        if ((self.worker and self.worker.isRunning())
-                or (self.guess_worker and self.guess_worker.isRunning())
-                or (self.preview_worker and self.preview_worker.isRunning())):
-            self.message.setText("The read is still running. Close after it finishes.")
+    def workers_finished(self):
+        if any(worker and worker.isRunning() for worker in (self.worker, self.guess_worker, self.preview_worker)):
             return
-        super().reject()
+        if self._closing:
+            self.dataset = None
+            super().reject()
+        elif self._accept_pending:
+            super().accept()
+
+    def reject(self):
+        self._closing = True
+        self._accept_pending = False
+        self.cancel_event.set()
+        self.dataset = None
+        self.guess_timer.stop()
+        self.guess_pending = False
+        self.load.setEnabled(False)
+        self.preview_button.setEnabled(False)
+        self.cancel_button.setEnabled(False)
+        self.message.setText("Stopping import…")
+        self.import_progress.setVisible(False)
+        self.progress_detail.setVisible(False)
+        # Workers stop at their next bounded read/filter/copy boundary. Keep
+        # their Qt owners alive only until handles and buffers are released.
+        self.workers_finished()
 
 
 class SliceAxisControls(W.QGroupBox):

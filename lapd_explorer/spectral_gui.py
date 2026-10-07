@@ -11,7 +11,7 @@ from .spectrogram_gui import Controls as SpectrogramControls
 from .trace_picker import TracePicker
 from .appearance import FacilityLogo, colors
 from .langmuir_gui import IntervalEditor, TraceView
-from .widgets import ScientificDoubleSpinBox, Worker, combo, spin, form_layout
+from .widgets import ScientificDoubleSpinBox, Worker, combo, colormap_combo, spin, form_layout
 
 
 def number(value=0., low=-1e15, high=1e15, decimals=6):
@@ -139,8 +139,7 @@ class SpectralDialog(W.QDialog):
         self.frequency_start = number(0., 0.)
         self.frequency_stop = number(self.fs/2, 0.)
         self.frequency_step = spin(1, 2**24, 1)
-        self.cmap = combo(plotting.COLORMAPS)
-        self.cmap.setCurrentText(parent.cmap.currentText() if hasattr(parent, "cmap") else "viridis")
+        self.cmap = colormap_combo(parent.cmap.currentText() if hasattr(parent, "cmap") else "viridis")
         self.lock = W.QCheckBox("Fixed scale during animation")
         self.lock.setChecked(True)
         df.addRow("Quantity", self.quantity)
@@ -248,6 +247,7 @@ class SpectralDialog(W.QDialog):
         self.quantity.currentTextChanged.connect(self.quantity_changed)
         for widget in (self.representation, self.cmap, self.interpretation, self.amplitude, self.animation_mode):
             widget.currentTextChanged.connect(self.display_changed)
+        self.cmap.currentTextChanged.connect(self.draw_locations)
         for widget in (self.degrees, self.lock):
             widget.toggled.connect(self.display_changed)
         for widget in (self.phase, self.phase_steps, self.frequency_step, self.fps, self.frequency_start, self.frequency_stop):

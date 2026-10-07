@@ -4,6 +4,7 @@ import json
 import numpy as np
 import h5py
 from .model import Dataset
+from .cancellation import check_canceled
 from .temporal import sample_slice, selection_metadata, sample_times, source_chunk_samples, resample_into
 
 
@@ -113,14 +114,16 @@ def infer_shots_from_positions(xyz, decimals=4):
 
 
 def guess_shots_per_case(path, spec, control=None, start=0, stop=None,
-                         position_source="target", decimals=4):
+                         position_source="target", decimals=4, *, canceled=None):
     """Infer shots from one dataset's row count and optional motion metadata.
 
     Shot estimation never reads digitizer signal samples.
     """
     from bapsflib import lapd
 
+    check_canceled(canceled)
     with lapd.File(path, mode="r") as f:
+        check_canceled(canceled)
         mapper, opts, group, dataset, _ = _digitizer_dataset(f, spec)
         first, last, step = slice(start, stop).indices(dataset.shape[0])
         count = len(range(first, last, step))
@@ -130,7 +133,7 @@ def guess_shots_per_case(path, spec, control=None, start=0, stop=None,
         xyz = None
         field = "none (point assumed)"
         if control is not None:
-            records = _record_metadata(f, mapper, opts, group, dataset.shape[0], control, start, stop, position_source)
+            records = _record_metadata(f, mapper, opts, group, dataset.shape[0], control, start, stop, position_source, canceled=canceled)
             field, xyz = records["position_field"], records["xyz"]
             count = len(xyz)
             if not count:
@@ -140,7 +143,9 @@ def guess_shots_per_case(path, spec, control=None, start=0, stop=None,
                 field = "none (point assumed)"
     # Without finite motion metadata, assume a point without allocating one
     # placeholder coordinate per record. The user may enter manual dimensions.
+    check_canceled(canceled)
     shots, points, shape = (count, 1, ()) if xyz is None else infer_shots_from_positions(xyz, decimals)
+    check_canceled(canceled)
     return {
         "shots_per_case": shots,
         "spatial_points": points,
@@ -161,7 +166,8 @@ def _digitizer_dataset(f, spec):
     return mapper, opts, group, group[name], info
 
 
-def _record_metadata(f, mapper, opts, group, count, control, start, stop, position_source):
+def _record_metadata(f, mapper, opts, group, count, control, start, stop, position_source, *, canceled=None):
+    check_canceled(canceled)
     first, last, step = slice(start, stop).indices(count)
     indices = np.arange(first, last, step)
     config = mapper.configs[opts["config_name"]]["shotnum"]
@@ -171,8 +177,10 @@ def _record_metadata(f, mapper, opts, group, count, control, start, stop, positi
         header = group[mapper.construct_header_dataset_name(**opts)]
         shots = np.asarray(header.fields(config["dset field"][0])[first:last])
     field, measured, target, controls = "xyz", np.full((len(shots), 3), np.nan), None, None
+    check_canceled(canceled)
     if control is not None and len(shots):
         records = f.read_controls([tuple(control)], shotnum=shots)
+        check_canceled(canceled)
         valid = np.isin(shots, records["shotnum"])
         indices, shots = indices[valid], shots[valid]
         order = np.argsort(records["shotnum"])
@@ -183,13 +191,15 @@ def _record_metadata(f, mapper, opts, group, count, control, start, stop, positi
             if position_source == "target":
                 field = "xyz_target"
         controls = records.info["controls"]
+    check_canceled(canceled)
     return dict(indices=indices, shots=shots, xyz=target if field == "xyz_target" else measured,
                 measured=measured, target=target, position_field=field, controls=controls)
 
 
 def import_metadata(path, spec=None, dataset_path=None, dt=None, control=None,
-                    start=0, stop=None, position_source="target", decimals=4):
+                    start=0, stop=None, position_source="target", decimals=4, *, canceled=None):
     """Time base and record selectors for a preview; never reads signal samples."""
+    check_canceled(canceled)
     if spec is None:
         with h5py.File(path, "r") as f:
             dataset = f[dataset_path]
@@ -199,6 +209,7 @@ def import_metadata(path, spec=None, dataset_path=None, dt=None, control=None,
             if not count:
                 raise ValueError("No records in this dataset.")
             sample_slice(dataset.shape[-1], dt)
+            check_canceled(canceled)
             return dict(samples=dataset.shape[-1], dt=dt, indices=np.arange(count),
                         shots=None, xyz=None, shape=dataset.shape, units="raw units")
     from bapsflib import lapd
@@ -210,7 +221,7 @@ def import_metadata(path, spec=None, dataset_path=None, dt=None, control=None,
             native_dt *= float(info.get("sample average (hardware)") or 1)
         if native_dt is None or not np.isfinite(native_dt) or native_dt <= 0:
             raise ValueError("Digitizer sample interval is missing; use Raw HDF5 with an explicit interval.")
-        records = _record_metadata(f, mapper, opts, group, dataset.shape[0], control, start, stop, position_source)
+        records = _record_metadata(f, mapper, opts, group, dataset.shape[0], control, start, stop, position_source, canceled=canceled)
         if not len(records["indices"]):
             raise ValueError("No records in the selected range.")
         return dict(records, samples=dataset.shape[-1], dt=native_dt, shape=dataset.shape, units="V",
@@ -240,12 +251,14 @@ def preview_trace(path, metadata, record_index, first, last, t0=0., spec=None, d
 
 
 def read_lapd(path, selections, control=None, start=0, stop=None, t0=0.0, position_source="target",
-              *, sample_limits=None, time_limits=None, decimation=1, downsampling="polyphase", progress=None):
+              *, sample_limits=None, time_limits=None, decimation=1, downsampling="polyphase", progress=None, canceled=None):
     from bapsflib import lapd
+    check_canceled(canceled)
     arrays, reference, time, dt, xyz, infos = {}, None, None, None, None, {}
     with lapd.File(path, mode="r") as f:
         infos["acquisition"] = dict(f.info)
         for channel_index, (name, spec) in enumerate(selections.items()):
+            check_canceled(canceled)
             mapper, opts, group, dataset, info = _digitizer_dataset(f, spec)
             rate = info.get("clock rate")
             if rate is None:
@@ -255,7 +268,7 @@ def read_lapd(path, selections, control=None, start=0, stop=None, t0=0.0, positi
                 raise ValueError("Invalid digitizer sample interval.")
             selection = sample_slice(dataset.shape[-1], step, t0, sample_limits, time_limits, decimation, downsampling)
             channel_time = sample_times(selection, step, t0, downsampling)
-            meta = _record_metadata(f, mapper, opts, group, dataset.shape[0], control, start, stop, position_source)
+            meta = _record_metadata(f, mapper, opts, group, dataset.shape[0], control, start, stop, position_source, canceled=canceled)
             shot = meta["shots"]
             if not len(shot):
                 raise ValueError("No records in the selected range.")
@@ -266,6 +279,7 @@ def read_lapd(path, selections, control=None, start=0, stop=None, t0=0.0, positi
                     or not np.allclose(channel_time, time, rtol=1e-10, atol=0)):
                 raise ValueError("Vector channels must have identical shot numbers, sample counts and time steps.")
             reference, time, dt = shot.copy(), channel_time, step
+            check_canceled(canceled)
             signal = np.empty((len(shot), len(time)), dtype=np.float32)
             batch = max(1, min(256, 8_000_000 // source_chunk_samples(selection, downsampling)))
             read_opts = {key: spec[key] for key in ("digitizer", "adc", "config_name") if spec.get(key)}
@@ -273,6 +287,7 @@ def read_lapd(path, selections, control=None, start=0, stop=None, t0=0.0, positi
             for first in range(0, len(shot), batch):
                 rows = meta["indices"][first:first + batch].tolist()
                 def read(part):
+                    check_canceled(canceled)
                     r = f.read_data(spec["board"], spec["channel"], **read_opts, index=rows, time_slice=part)
                     if not np.array_equal(r["shotnum"], shot[first:first + batch]):
                         raise ValueError("Digitizer shot numbers changed while reading.")
@@ -285,7 +300,7 @@ def read_lapd(path, selections, control=None, start=0, stop=None, t0=0.0, positi
                                  len(selections)*len(shot)*len(time), "Reading / resampling")
                 if first == 0:
                     report(0)
-                resample_into(read, signal[first:first+len(rows)], selection, downsampling, progress=report)
+                resample_into(read, signal[first:first+len(rows)], selection, downsampling, progress=report, canceled=canceled)
             channel_info["time_slice"] = selection
             arrays[name] = signal
             current_xyz = meta["xyz"]
@@ -307,18 +322,21 @@ def read_lapd(path, selections, control=None, start=0, stop=None, t0=0.0, positi
         raise ValueError("No records in the selected range.")
     if len(np.unique(reference)) != len(reference):
         raise ValueError("Duplicate global shot numbers; select a single acquisition configuration.")
+    check_canceled(canceled)
     return Records(arrays, time, reference,
                    xyz, str(path), infos)
 
 
-def map_motion(records, cases=1, repeats=1, repeat_order="case,shot", decimals=4, *, progress=None):
+def map_motion(records, cases=1, repeats=1, repeat_order="case,shot", decimals=4, *, progress=None, canceled=None):
     """Group by position, then explicitly map per-position acquisition order.
 
     Reject incomplete grids and unmatched repeat counts rather than silently
     combining missing positions or treating parameter scans as statistics.
     """
+    check_canceled(canceled)
     if progress:
         progress(0, len(records.shots)*2, "Mapping")
+    check_canceled(canceled)
     xyz = records.xyz
     if xyz is None or not np.all(np.isfinite(xyz)):
         raise ValueError("Finite motion coordinates are unavailable. Use manual dimensions.")
@@ -335,36 +353,48 @@ def map_motion(records, cases=1, repeats=1, repeat_order="case,shot", decimals=4
     expected = int(np.prod(shape)) * cases * repeats
     if expected != len(records.shots):
         raise ValueError(f"Grid requires {expected} records; found {len(records.shots)}. Set cases/repeats explicitly or use manual mapping.")
+    check_canceled(canceled)
     output = {n: np.empty(shape + (cases, repeats, len(records.time)), dtype=a.dtype)
               for n, a in records.channels.items()}
     shotmap = np.empty(shape + (cases, repeats), dtype=records.shots.dtype)
     buckets = {}
     for row in range(len(xyz)):
+        if row % 256 == 0:
+            check_canceled(canceled)
         key = tuple(int(np.searchsorted(coords[d], xyz[row, i])) for d, i in zip(dims, axes))
         buckets.setdefault(key, []).append(row)
         if progress and (row % 256 == 0 or row+1 == len(xyz)):
             progress(row+1, len(xyz)*2, "Mapping")
     if len(buckets) != int(np.prod(shape)):
         raise ValueError("Motion points do not form a complete rectangular grid.")
-    mapped = reported = 0
+    mapped = 0
+    time_chunk = min(len(records.time), 65536)
+    batch = max(1, min(256, 8_000_000 // time_chunk))
+    if repeat_order not in ("case,shot", "shot,case"):
+        raise ValueError("Unknown per-position acquisition order.")
     for key, rows in buckets.items():
+        check_canceled(canceled)
         if len(rows) != cases*repeats:
             raise ValueError("Unequal records per position; select a balanced acquisition subset.")
-        for n, a in records.channels.items():
-            block = a[rows]
-            if repeat_order == "case,shot":
-                output[n][key] = block.reshape(cases, repeats, -1)
-            elif repeat_order == "shot,case":
-                output[n][key] = block.reshape(repeats, cases, -1).transpose(1, 0, 2)
-            else:
-                raise ValueError("Unknown per-position acquisition order.")
-        block = records.shots[rows]
-        shotmap[key] = (block.reshape(cases, repeats) if repeat_order == "case,shot"
-                        else block.reshape(repeats, cases).T)
-        mapped += len(rows)
-        if progress and (mapped-reported >= 256 or mapped == len(xyz)):
-            progress(len(xyz)+mapped, len(xyz)*2, "Mapping")
-            reported = mapped
+        # Copy only a bounded record block, including a single-location run.
+        for first in range(0, len(rows), batch):
+            check_canceled(canceled)
+            selected = rows[first:first+batch]
+            order = np.arange(first, first+len(selected))
+            ci, si = (order//repeats, order % repeats) if repeat_order == "case,shot" else (order % cases, order//cases)
+            for time_first in range(0, len(records.time), time_chunk):
+                check_canceled(canceled)
+                time_last = min(len(records.time), time_first+time_chunk)
+                for n, a in records.channels.items():
+                    check_canceled(canceled)
+                    output[n][key][ci, si, time_first:time_last] = a[selected, time_first:time_last]
+                done = mapped+len(selected)*time_last/len(records.time)
+                if progress:
+                    progress(len(xyz)+done, len(xyz)*2, "Mapping")
+            check_canceled(canceled)
+            shotmap[key][ci, si] = records.shots[selected]
+            mapped += len(selected)
+    check_canceled(canceled)
     dims += ["case", "shot", "time"]
     coords.update(case=np.arange(cases), shot=np.arange(repeats), time=records.time)
     # Singleton case/repeat axes carry no extra statistical information.
@@ -375,6 +405,7 @@ def map_motion(records, cases=1, repeats=1, repeat_order="case,shot", decimals=4
             shotmap = np.squeeze(shotmap, axis=axis)
             dims.remove(d)
             coords.pop(d)
+    check_canceled(canceled)
     return Dataset(output, tuple(dims), coords, source=records.source,
                    shot_numbers=shotmap, metadata=records.metadata,
                    history=(f"Motion grid rounded to {decimals} decimals; per-position order {repeat_order}",) + _temporal_history(records))
@@ -395,10 +426,12 @@ def _temporal_history(records):
             f"method {selection.get('downsampling method', 'simple')}",)
 
 
-def map_manual(records, axes, spatial_units="cm", *, progress=None):
+def map_manual(records, axes, spatial_units="cm", *, progress=None, canceled=None):
     """axes = [(name, size, start, stop), ...] in slowest-to-fastest order."""
+    check_canceled(canceled)
     if progress:
         progress(0, 1, "Mapping")
+    check_canceled(canceled)
     dims = tuple(a[0] for a in axes) + ("time",)
     sizes = tuple(a[1] for a in axes)
     if int(np.prod(sizes)) != len(records.shots):
@@ -408,18 +441,21 @@ def map_manual(records, axes, spatial_units="cm", *, progress=None):
     arrays = {n: a.reshape(sizes + (len(records.time),)) for n, a in records.channels.items()}
     if progress:
         progress(1, 1, "Mapping")
+    check_canceled(canceled)
     return Dataset(arrays, dims, coords, spatial_units=spatial_units, source=records.source,
                    shot_numbers=records.shots.reshape(sizes), metadata=records.metadata,
                    history=("Manual mapping, C order (last listed axis varies fastest)",) + _temporal_history(records))
 
 
 def read_raw(path, paths, axes, dt, t0=0, spatial_units="cm", units="V",
-             *, sample_limits=None, time_limits=None, decimation=1, downsampling="polyphase", progress=None):
+             *, sample_limits=None, time_limits=None, decimation=1, downsampling="polyphase", progress=None, canceled=None):
+    check_canceled(canceled)
     if not np.isfinite(dt) or dt <= 0 or not np.isfinite(t0):
         raise ValueError("Sample interval must be positive and start time finite.")
     arrays, time, temporal = {}, None, {}
     with h5py.File(path, "r") as f:
         for channel_index, (name, p) in enumerate(paths.items()):
+            check_canceled(canceled)
             dataset = f[p]
             if dataset.ndim < 1:
                 raise ValueError("A time-series dataset is required.")
@@ -438,7 +474,7 @@ def read_raw(path, paths, axes, dt, t0=0, spatial_units="cm", units="V",
             report(0, 0, 0)
             if dataset.ndim == 1:
                 resample_into(lambda part: np.asarray(dataset[part], dtype=float)[None, :], a, selection,
-                              downsampling, progress=lambda done: report(done, 0, 1))
+                              downsampling, progress=lambda done: report(done, 0, 1), canceled=canceled)
             else:
                 batch = max(1, min(256, 8_000_000 // source_chunk_samples(selection, downsampling)))
                 row = 0
@@ -447,7 +483,7 @@ def read_raw(path, paths, axes, dt, t0=0, spatial_units="cm", units="V",
                         last = min(dataset.shape[-2], first + batch)
                         resample_into(lambda part: np.asarray(dataset[prefix + (slice(first, last), part)], dtype=float),
                                       a[row:row+last-first], selection, downsampling,
-                                      progress=lambda done: report(done, row, last-first))
+                                      progress=lambda done: report(done, row, last-first), canceled=canceled)
                         row += last - first
             arrays[name] = a
             temporal[name] = selection_metadata(selection, dt, downsampling)
@@ -457,9 +493,10 @@ def read_raw(path, paths, axes, dt, t0=0, spatial_units="cm", units="V",
     records = Records(arrays, time, np.arange(shape[0]), None, str(path),
                       {"raw datasets": paths, "temporal selection": temporal,
                        "shot numbers": "record indices; global shot numbers unavailable"})
-    result = map_manual(records, axes, spatial_units, progress=progress)
+    result = map_manual(records, axes, spatial_units, progress=progress, canceled=canceled)
     result.units = units
     result.shot_numbers = None
+    check_canceled(canceled)
     return result
 
 

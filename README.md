@@ -207,6 +207,10 @@ HDF5 data:
 - During import, a progress bar and counts show samples processed and remaining,
   followed by mapping progress. Progress measures work completed, not estimated
   time remaining.
+- **Cancel** stops reading, resampling, and mapping at the next bounded chunk,
+  discards partial results, and closes the importer automatically after workers
+  release their files and buffers. A native read already in progress finishes
+  its current chunk; the rest of the acquisition is not read.
 - Choose **Preview one trace / choose limits…** to open a zoom/pan toolbar and
   draggable interval. The initial trace comes from the middle of the selected
   record range. Choose another selected channel, original record index, global
@@ -394,6 +398,16 @@ third component contributes only to the magnitude background. Use channels with
 matching physical units and calibration. Mesh and arrow colormaps are
 independent; colored arrows receive their own scale bar. **Fixed scale across
 time** locks both color ranges.
+
+All color map selectors offer gradient previews and the same 36 palettes, each
+with a reversed (`_r`) version: perceptually uniform and other sequential maps
+for magnitudes/power, diverging maps for signed fields, cyclic maps for phase,
+grayscale maps for printing, and familiar rainbow maps. Hover over a palette
+for guidance. These choices are available for the main mesh, vector arrows,
+spectral fields and location maps, spectrograms, and Langmuir derived quantities.
+Langmuir results have their own **Color map** selector. Image and movie exports
+use the selected palette. Color limits and scaling remain independent choices;
+use symmetric limits for centered signed data or a full-cycle range for phase.
 
 For 2D planes, **Mesh colormap range** defaults to **Automatic**, preserving
 the current scaling method. Choose **Manual** and enter Min/Max in displayed

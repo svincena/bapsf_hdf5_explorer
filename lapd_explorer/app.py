@@ -11,7 +11,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolb
 from .model import demo, preprocess, quantity
 from . import io, plotting
 from .widgets import (Worker, ImportDialog, SmoothingDialog, SpatialAveragingDialog,
-                      SliceAxisControls, ColormapRangeControls, combo, spin, form_layout, numeric_edit)
+                      SliceAxisControls, ColormapRangeControls, combo, colormap_combo, spin, form_layout, numeric_edit)
 from .smoothing import DEFAULT_SMOOTHING
 from .spatial import DEFAULT_SPATIAL_AVERAGING
 from .appearance import FacilityLogo, apply_appearance, colors, stylesheet
@@ -117,9 +117,9 @@ class MainWindow(W.QMainWindow):
         note.setWordWrap(True)
         note.setObjectName("subtitle")
         sf.addRow(note)
-        self.cmap = combo(plotting.COLORMAPS)
+        self.cmap = colormap_combo()
         sf.addRow("Mesh color map", self.cmap)
-        self.arrow_cmap = combo(["Solid white"] + plotting.COLORMAPS)
+        self.arrow_cmap = colormap_combo("Solid white", solid=True)
         self.arrow_cmap.setToolTip("Color vector arrows by the magnitude of the horizontal and vertical components.")
         sf.addRow("Arrow color map", self.arrow_cmap)
         self.lock = W.QCheckBox("Fixed scale across time")

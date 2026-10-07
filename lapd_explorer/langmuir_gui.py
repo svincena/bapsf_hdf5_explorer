@@ -7,7 +7,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolb
 from matplotlib.widgets import SpanSelector
 from . import langmuir as analysis, plotting
 from .appearance import FacilityLogo, colors
-from .widgets import ScientificDoubleSpinBox, Worker, combo, spin, form_layout, numeric_edit
+from .widgets import ScientificDoubleSpinBox, Worker, combo, colormap_combo, spin, form_layout, numeric_edit
 
 
 class IntervalEditor(W.QWidget):
@@ -331,7 +331,12 @@ class LangmuirDialog(W.QDialog):
         result_panel = W.QWidget()
         result_layout = W.QVBoxLayout(result_panel)
         self.quantity = combo(list(analysis.QUANTITIES))
-        result_layout.addWidget(self.quantity)
+        self.cmap = colormap_combo(parent.cmap.currentText() if hasattr(parent, "cmap") else "viridis")
+        result_controls = W.QHBoxLayout()
+        result_controls.addWidget(self.quantity, 2)
+        result_controls.addWidget(W.QLabel("Color map"))
+        result_controls.addWidget(self.cmap, 1)
+        result_layout.addLayout(result_controls)
         self.result_fig = plotting.figure(appearance)
         self.result_canvas = FigureCanvasQTAgg(self.result_fig)
         self.result_toolbar = NavigationToolbar2QT(self.result_canvas, self)
@@ -369,6 +374,7 @@ class LangmuirDialog(W.QDialog):
         for widget in (self.invert, self.zero, self.ideal):
             widget.toggled.connect(self.settings_changed)
         self.quantity.currentTextChanged.connect(self.draw_results)
+        self.cmap.currentTextChanged.connect(self.draw_results)
         self.settings.interval = self.editor.interval()
         self.selection_changed()
         self.trace_view.toolbar.push_current()
@@ -506,7 +512,7 @@ class LangmuirDialog(W.QDialog):
                     case=self.indices["case"].value() if "case" in self.indices else 0,
                     shot=self.indices["shot"].value() if "shot" in self.indices else 0,
                     slices=[self.indices[d].value() for d in self.data.spatial_dims], appearance=self.appearance,
-                    cmap=self.parent().cmap.currentText() if hasattr(self.parent(), "cmap") else "viridis")
+                    cmap=self.cmap.currentText())
         value = self.batch.values[name][self.index()]
         self.result_ax.set_title(self.result_ax.get_title() + f"\nSelected: {value:.6g} {analysis.QUANTITIES[name][1]}")
         self.result_toolbar.update()

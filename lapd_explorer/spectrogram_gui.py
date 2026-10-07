@@ -5,7 +5,7 @@ from PySide6 import QtCore as C, QtWidgets as W
 from matplotlib.colors import Normalize, LogNorm, SymLogNorm
 from . import spectrogram as analysis, plotting
 from .appearance import colors
-from .widgets import combo, spin, form_layout, ScientificDoubleSpinBox
+from .widgets import combo, colormap_combo, spin, form_layout, ScientificDoubleSpinBox
 
 
 def number(value=0., low=-1e15, high=1e15):
@@ -95,8 +95,7 @@ class Controls(W.QWidget):
         self.reference = number(1., 1e-300)
         self.dynamic_range = number(80., .001, 1000.)
         self.linthresh = number(.001, 1e-300)
-        self.cmap = combo(plotting.COLORMAPS)
-        self.cmap.setCurrentText("magma")
+        self.cmap = colormap_combo("magma")
         self.auto_color = W.QCheckBox("Automatic color limits")
         self.auto_color.setChecked(True)
         self.color_min, self.color_max = number(-80.), number(0.)
