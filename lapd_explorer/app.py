@@ -11,7 +11,8 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolb
 from .model import demo, preprocess, quantity
 from . import io, plotting
 from .widgets import (Worker, ImportDialog, SmoothingDialog, SpatialAveragingDialog,
-                      SliceAxisControls, ColormapRangeControls, combo, colormap_combo, spin, form_layout, numeric_edit)
+                      SliceAxisControls, ColormapRangeControls, VectorArrowControls,
+                      combo, colormap_combo, spin, form_layout, numeric_edit)
 from .smoothing import DEFAULT_SMOOTHING
 from .spatial import DEFAULT_SPATIAL_AVERAGING
 from .appearance import FacilityLogo, apply_appearance, colors, stylesheet
@@ -122,6 +123,9 @@ class MainWindow(W.QMainWindow):
         self.arrow_cmap = colormap_combo("Solid white", solid=True)
         self.arrow_cmap.setToolTip("Color vector arrows by the magnitude of the horizontal and vertical components.")
         sf.addRow("Arrow color map", self.arrow_cmap)
+        self.arrow_style = VectorArrowControls()
+        self.arrow_style.changed.connect(self.schedule_draw)
+        sf.addRow(self.arrow_style)
         self.lock = W.QCheckBox("Fixed scale across time")
         self.lock.setChecked(True)
         sf.addRow(self.lock)
@@ -513,6 +517,7 @@ class MainWindow(W.QMainWindow):
                     slices=[w.value() for w in self.slice_boxes], time=self.slider.value(),
                     time_unit=self.time_unit.currentText(), sigfigs=self.sigfigs.value(),
                     lock=self.lock.isChecked(), cmap=self.cmap.currentText(), arrow_cmap=self.arrow_cmap.currentText(),
+                    arrow_style=self.arrow_style.settings(),
                     color_limits=(self.color_range.settings().get("limits")
                                   if len(self.data.spatial_dims) == 2 else None),
                     slice_axes=[dict(control.settings(), view=view)
@@ -520,6 +525,7 @@ class MainWindow(W.QMainWindow):
 
     def invalidate(self, *args):
         self.arrow_cmap.setEnabled(self.mode.currentText() == "Vector")
+        self.arrow_style.setEnabled(self.mode.currentText() == "Vector" and len(self.data.spatial_dims) == 2)
         self._values = None
         self._render_key = None
         self.schedule_draw()

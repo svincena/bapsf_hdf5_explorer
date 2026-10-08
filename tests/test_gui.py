@@ -36,6 +36,36 @@ def test_colormap_catalog_previews_and_reversed_colors(app):
     assert left.pixelColor(0, 7) != reversed_left.pixelColor(0, 7)
 
 
+def test_vector_arrow_controls_redraw_cache_reset_and_export_options(app, tmp_path):
+    from lapd_explorer.vector_style import DEFAULT_ARROW_STYLE
+    w = MainWindow()
+    w.show()
+    assert not w.arrow_style.isEnabled()
+    w.mode.setCurrentText("Vector")
+    w.draw()
+    cached = w._values
+    style = w.arrow_style
+    style.toggle.click()
+    style.fields["width"].setValue(2.5)
+    style.fields["length"].setValue(1.5)
+    style.stride.setValue(3)
+    style.pivot.setCurrentText("Tail")
+    w.draw()
+    assert w._values is cached
+    arrows = w.main_ax.collections[1]
+    assert arrows.width == pytest.approx(2.5/72) and arrows.pivot == "tail"
+    assert arrows.N == 9*11
+    exported = w.options()["arrow_style"]
+    assert exported["width"] == 2.5 and exported["length"] == 1.5 and exported["stride"] == 3
+    app.processEvents()
+    w.grab().save(str(tmp_path/"vector-arrow-controls.png"))
+    style.reset()
+    assert style.settings() == DEFAULT_ARROW_STYLE
+    w.mode.setCurrentText("Scalar")
+    assert not style.isEnabled()
+    w.close()
+
+
 def test_gui_linked_slices_processing_point_line_and_movie(app, tmp_path):
     w = MainWindow()
     w.show()

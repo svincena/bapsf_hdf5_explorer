@@ -11,7 +11,7 @@ from .spectrogram_gui import Controls as SpectrogramControls
 from .trace_picker import TracePicker
 from .appearance import FacilityLogo, colors
 from .langmuir_gui import IntervalEditor, TraceView
-from .widgets import ScientificDoubleSpinBox, Worker, combo, colormap_combo, spin, form_layout
+from .widgets import ScientificDoubleSpinBox, Worker, VectorArrowControls, combo, colormap_combo, spin, form_layout
 
 
 def number(value=0., low=-1e15, high=1e15, decimals=6):
@@ -152,6 +152,10 @@ class SpectralDialog(W.QDialog):
         df.addRow("Display / sweep end (Hz)", self.frequency_stop)
         df.addRow("Sweep every Nth bin", self.frequency_step)
         df.addRow("Color map", self.cmap)
+        self.arrow_style = VectorArrowControls(parent.arrow_style.settings() if hasattr(parent, "arrow_style") else None)
+        self.arrow_style.setEnabled(vector and len(data.spatial_dims) == 2)
+        df.addRow(self.arrow_style)
+        self.arrow_style.changed.connect(self.display_changed)
         df.addRow(self.lock)
         display_scroll = W.QScrollArea()
         display_scroll.setWidgetResizable(True)
@@ -685,6 +689,7 @@ class SpectralDialog(W.QDialog):
             key = (id(result), self.quantity.currentText(), self.representation.currentText(),
                    self.degrees.isChecked(), self.cmap.currentText(), self.interpretation.currentText(),
                    self.amplitude.currentText(), self.index(), self.appearance, self.lock.isChecked())
+            key += (tuple(self.arrow_style.settings().items()),)
             if self._render_key == key:
                 self.result_fig._lapd_update_derived(data, title)
             else:
@@ -695,7 +700,8 @@ class SpectralDialog(W.QDialog):
                     slices=[self.indices[d].value() for d in data.spatial_dims],
                     cmap=self.cmap.currentText(), appearance=self.appearance, title=title, vector=vector,
                     limits=getattr(self, "_animation_limits", None) if self._animation_frames is not None else None,
-                    arrow_cmap=self.parent().arrow_cmap.currentText() if hasattr(self.parent(), "arrow_cmap") else "Solid white")
+                    arrow_cmap=self.parent().arrow_cmap.currentText() if hasattr(self.parent(), "arrow_cmap") else "Solid white",
+                    arrow_settings=self.arrow_style.settings())
                 self._render_key = key
                 self.result_toolbar.update()
             self.result_canvas.draw_idle()

@@ -290,8 +290,13 @@ def test_gui_geometry_cached_views_intervals_and_animation(app, tmp_path, monkey
     assert "f = 80" in dialog.frame_label.text()
     if len(dims) == 3:
         dialog.interpretation.setCurrentText("Vector components")
+        dialog.arrow_style.fields["width"].setValue(3.)
+        dialog.arrow_style.stride.setValue(2)
         dialog.step_frame()
+        arrows = dialog.result_ax.collections[1]
+        assert arrows.width == pytest.approx(3/72) and arrows.N == 2
         dialog.step_frame()
+        assert dialog.result_ax.collections[1] is arrows
         assert len(dialog.result_ax.collections) >= 2
     dialog.animation_mode.setCurrentIndex(0)
     dialog.frequency_start.setValue(60)

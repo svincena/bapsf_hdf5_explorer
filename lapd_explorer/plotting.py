@@ -6,6 +6,7 @@ from matplotlib import patheffects
 from .model import quantity, spectrum
 from .appearance import colors
 from .colormaps import COLORMAPS
+from .vector_style import arrow_style, arrow_stride, arrow_scale, quiver_kwargs, maximum_magnitude
 
 BG, PANEL, FG, MUTED, ACCENT = (colors()[key] for key in ("bg", "panel", "fg", "muted", "accent"))
 TIME_UNITS = {"s": 1, "ms": 1e3, "µs": 1e6, "ns": 1e9}
@@ -125,22 +126,19 @@ def render(fig, data, opts, values=None):
             # Components explicitly assigned to horizontal/vertical directions.
             u = data.selected(names[0], opts["case"], opts["shot"])[..., ti]
             v = data.selected(names[1], opts["case"], opts["shot"])[..., ti]
-            step = max(1, max(frame.shape)//18)
+            vector_style = arrow_style(opts.get("arrow_style"))
+            step = arrow_stride(frame.shape, vector_style)
             arrow_cmap = opts.get("arrow_cmap", "Solid white")
-            # Dark outlines keep white and colored arrows legible on pale cells.
-            arrow_args = dict(alpha=.95, pivot="mid", angles="xy", scale_units="xy",
-                              edgecolors="#172334", linewidths=.3)
+            reference_u, reference_v = ((data.selected(name, opts["case"], opts["shot"]) for name in names[:2])
+                                        if opts["lock"] else (u, v))
+            maximum = maximum_magnitude(reference_u, reference_v)
+            arrow_args = quiver_kwargs(vector_style)
+            arrow_args["scale"] = arrow_scale(horizontal, vertical, maximum, step, vector_style)
             if arrow_cmap == "Solid white":
                 quiver = ax.quiver(horizontal[::step], vertical[::step], u[::step, ::step], v[::step, ::step],
                                    color="white", **arrow_args)
             else:
                 arrow_magnitude = np.hypot(u, v)
-                if opts["lock"]:
-                    all_magnitudes = np.hypot(data.selected(names[0], opts["case"], opts["shot"]),
-                                              data.selected(names[1], opts["case"], opts["shot"]))
-                    maximum = float(np.nanmax(all_magnitudes))
-                else:
-                    maximum = float(np.nanmax(arrow_magnitude))
                 arrow_norm = Normalize(0, maximum if np.isfinite(maximum) and maximum > 0 else 1)
                 quiver = ax.quiver(horizontal[::step], vertical[::step], u[::step, ::step], v[::step, ::step],
                                    arrow_magnitude[::step, ::step], cmap=arrow_cmap, norm=arrow_norm, **arrow_args)
@@ -215,13 +213,15 @@ def render(fig, data, opts, values=None):
             if mode == "Vector":
                 u = data.selected(names[0], opts["case"], opts["shot"])[..., frame_index]
                 v = data.selected(names[1], opts["case"], opts["shot"])[..., frame_index]
+                if not opts["lock"]:
+                    maximum = maximum_magnitude(u, v)
+                    quiver.scale = arrow_scale(horizontal, vertical, maximum, step, vector_style)
                 if arrow_cmap == "Solid white":
                     quiver.set_UVC(u[::step, ::step], v[::step, ::step])
                 else:
                     magnitude = np.hypot(u, v)
                     quiver.set_UVC(u[::step, ::step], v[::step, ::step], magnitude[::step, ::step])
                     if not opts["lock"]:
-                        maximum = float(np.nanmax(magnitude))
                         quiver.set_clim(0, maximum if np.isfinite(maximum) and maximum > 0 else 1)
         elif len(spatial) == 1:
             spatial_line.set_ydata(values[:, frame_index])
@@ -246,7 +246,7 @@ def draw_psd(ax, trace, data, theme=None):
 
 
 def render_derived(fig, data, name, *, case=0, shot=0, slices=(), cmap="viridis", appearance="Light",
-                   title=None, vector=False, limits=None, arrow_cmap="Solid white"):
+                   title=None, vector=False, limits=None, arrow_cmap="Solid white", arrow_settings=None):
     """Derived spatial frames, with shared navigation and an in-place animation update.
 
     The singleton time axis is an adapter for a spatial frame, not a spectral
@@ -280,12 +280,12 @@ def render_derived(fig, data, name, *, case=0, shot=0, slices=(), cmap="viridis"
         vertical.set(xlabel=f"{spatial[0]} ({data.spatial_units})", ylabel=data.units, title=f"{spatial[1]}={x[ix]:g}")
         if vector:
             u, v = [data.selected(n, case, shot)[..., 0] for n in data.channels]
-            step = max(1, max(values.shape)//18)
-            args = dict(pivot="mid", angles="xy", scale_units="xy", edgecolors="#172334", linewidths=.3)
+            vector_style = arrow_style(arrow_settings)
+            step = arrow_stride(values.shape, vector_style)
+            args = quiver_kwargs(vector_style)
             # Explicit, stable arrow scale also handles an all-zero initial frame.
             maximum = (limits[1] if limits else np.nanmax(values)) if np.any(np.isfinite(values)) else 1.
-            spacing = min(np.min(np.diff(c)) for c in (x, y) if len(c) > 1) if max(len(x), len(y)) > 1 else 1.
-            args["scale"] = maximum / (spacing*step*.8) if maximum > 0 else 1.
+            args["scale"] = arrow_scale(x, y, maximum, step, vector_style)
             if arrow_cmap == "Solid white":
                 arrows = ax.quiver(x[::step], y[::step], u[::step, ::step], v[::step, ::step], color="white", **args)
             else:
@@ -325,6 +325,8 @@ def render_derived(fig, data, name, *, case=0, shot=0, slices=(), cmap="viridis"
             v_line.set_ydata(values[:, ix])
             if vector:
                 u, v = [frame.selected(n, case, shot)[..., 0] for n in frame.channels]
+                if limits is None:
+                    arrows.scale = arrow_scale(x, y, maximum_magnitude(u, v), step, vector_style)
                 if arrow_cmap == "Solid white":
                     arrows.set_UVC(u[::step, ::step], v[::step, ::step])
                 else:

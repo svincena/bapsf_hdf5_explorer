@@ -399,6 +399,24 @@ matching physical units and calibration. Mesh and arrow colormaps are
 independent; colored arrows receive their own scale bar. **Fixed scale across
 time** locks both color ranges.
 
+In Vector mode, expand **Arrow style** to change shaft thickness, length
+multiplier, grid stride, head width/length, opacity, pivot (middle/tail/tip),
+and outline thickness. Shaft and outline thicknesses use points (1/72 inch),
+so exported images and movies retain the intended physical size. Head sizes
+are multiples of shaft thickness. A stride of **Auto** keeps the current
+automatic density; 1 draws every grid point and larger values draw every Nth
+point along both axes. These are display settings and do not change the data
+or the magnitudes represented by arrow colors. **Reset arrow style** restores
+the defaults.
+
+At length multiplier 1, the reference maximum spans 80% of the sampled grid
+spacing. **Fixed scale across time** uses the maximum in-plane magnitude over
+the selected case and shot for both arrow length and color; otherwise each
+frame supplies its reference. Spectral vector plots inherit the main arrow
+style when opened and expose the same controls in **Display**. Fixed spectral
+animation scales use the reference maximum over the animation. Arrow style
+changes redraw cached fields without recalculating spectra.
+
 All color map selectors offer gradient previews and the same 36 palettes, each
 with a reversed (`_r`) version: perceptually uniform and other sequential maps
 for magnitudes/power, diverging maps for signed fields, cyclic maps for phase,

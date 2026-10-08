@@ -770,6 +770,82 @@ class ColormapRangeControls(SliceAxisControls):
             self.changed.emit()
 
 
+class VectorArrowControls(W.QWidget):
+    """Compact, expandable style controls shared by vector displays."""
+    changed = C.Signal()
+
+    def __init__(self, settings=None, parent=None):
+        super().__init__(parent)
+        from .vector_style import arrow_style
+        style = arrow_style(settings)
+        layout = W.QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        self.toggle = W.QToolButton()
+        self.toggle.setText("Arrow style")
+        self.toggle.setCheckable(True)
+        self.toggle.setToolButtonStyle(C.Qt.ToolButtonTextBesideIcon)
+        self.toggle.setArrowType(C.Qt.RightArrow)
+        layout.addWidget(self.toggle)
+        self.panel = W.QWidget()
+        form = form_layout(self.panel)
+        form.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.panel)
+        self.fields = {}
+        for key, label, low, high, step, tooltip in [
+            ("width", "Shaft thickness (pt)", .1, 20., .1, "Physical shaft width in points (1/72 inch), including image and movie exports."),
+            ("length", "Length multiplier", .05, 20., .1, "Larger values lengthen arrows without changing data or arrow colors. At 1, the reference maximum spans 80% of the sampled grid spacing."),
+            ("headwidth", "Head width / shaft", 1., 20., .25, "Arrowhead width as a multiple of shaft thickness."),
+            ("headlength", "Head length / shaft", 1., 30., .25, "Arrowhead length as a multiple of shaft thickness."),
+            ("alpha", "Opacity", 0., 1., .05, "Zero is invisible; one is fully opaque."),
+            ("outline", "Outline thickness (pt)", 0., 5., .1, "Dark edge width in points. Set zero to remove the outline."),
+        ]:
+            widget = W.QDoubleSpinBox()
+            widget.setDecimals(2)
+            widget.setRange(low, high)
+            widget.setSingleStep(step)
+            widget.setValue(style[key])
+            widget.setKeyboardTracking(False)
+            widget.setToolTip(tooltip)
+            self.fields[key] = widget
+            form.addRow(label, widget)
+            widget.valueChanged.connect(self.changed)
+        self.stride = spin(0, 10000, int(style["stride"]))
+        self.stride.setSpecialValueText("Auto")
+        self.stride.setToolTip("Draw every Nth grid point along both axes. Auto aims for roughly 18–36 arrows on the longest axis; 1 draws every point. Display sampling does not alter data.")
+        form.insertRow(2, "Grid stride", self.stride)
+        self.stride.valueChanged.connect(self.changed)
+        self.pivot = combo(["Middle", "Tail", "Tip"])
+        self.pivot.setCurrentIndex(["mid", "tail", "tip"].index(style["pivot"]))
+        self.pivot.setToolTip("Part of each arrow anchored to its grid point.")
+        form.addRow("Pivot", self.pivot)
+        self.pivot.currentIndexChanged.connect(self.changed)
+        reset = W.QPushButton("Reset arrow style")
+        reset.clicked.connect(self.reset)
+        form.addRow(reset)
+        self.panel.hide()
+        self.toggle.toggled.connect(self.expand)
+
+    def expand(self, expanded):
+        self.toggle.setArrowType(C.Qt.DownArrow if expanded else C.Qt.RightArrow)
+        self.panel.setVisible(expanded)
+
+    def settings(self):
+        return dict({key: widget.value() for key, widget in self.fields.items()},
+                    stride=self.stride.value(), pivot=["mid", "tail", "tip"][self.pivot.currentIndex()])
+
+    def reset(self):
+        from .vector_style import DEFAULT_ARROW_STYLE
+        widgets = [*self.fields.values(), self.stride, self.pivot]
+        blockers = [C.QSignalBlocker(widget) for widget in widgets]
+        for key, widget in self.fields.items():
+            widget.setValue(DEFAULT_ARROW_STYLE[key])
+        self.stride.setValue(DEFAULT_ARROW_STYLE["stride"])
+        self.pivot.setCurrentIndex(0)
+        del blockers
+        self.changed.emit()
+
+
 class SpatialAveragingDialog(W.QDialog):
     """Configure spatial neighborhoods in the displayed plane's axis order."""
     METHODS = {"Box average": "box", "Gaussian average": "gaussian",
