@@ -2,6 +2,7 @@
 import threading
 from PySide6 import QtCore as C, QtGui as G, QtWidgets as W
 from .cancellation import ImportCanceled, check_canceled
+from .import_progress import ShotProgress
 from . import io
 from .temporal import DOWNSAMPLING_METHODS, retained_samples
 from .appearance import FacilityLogo
@@ -10,7 +11,7 @@ from .appearance import FacilityLogo
 class Worker(C.QThread):
     result = C.Signal(object)
     failed = C.Signal(str)
-    progress = C.Signal(float, float, str)
+    progress = C.Signal(float, float, object)
     aborted = C.Signal()
 
     def __init__(self, fn, parent=None, *, canceled=None):
@@ -627,13 +628,17 @@ class ImportDialog(W.QDialog):
             return
         fraction = min(1., max(0., done / total)) if total else 0.
         self.import_progress.setValue(round(fraction*1000))
-        phase = 2 if stage == "Mapping" else 1
+        phase = stage.phase if isinstance(stage, ShotProgress) else (2 if stage == "Mapping" else 1)
         self.import_progress.setFormat(f"Stage {phase}/2 · {fraction:.0%} complete")
-        if stage == "Mapping":
-            detail = f"{fraction:.0%} complete · {1-fraction:.0%} remaining"
+        if isinstance(stage, ShotProgress):
+            completed, count = stage.completed, stage.total
+            channel = f" · channel {stage.channel}/{stage.channels}" if stage.channels > 1 else ""
+            label = stage.stage + channel
         else:
-            detail = f"{round(done):,} / {round(total):,} samples processed · {round(total-done):,} remaining"
-        self.progress_detail.setText(f"{stage}: {detail}")
+            completed, count = int(done), int(total)
+            label = stage
+        detail = f"{completed:,} / {count:,} shots (acquisitions) processed · {count-completed:,} remaining"
+        self.progress_detail.setText(f"{label}: {detail}")
 
     def loaded(self, data):
         if self._closing or self.cancel_event.is_set():

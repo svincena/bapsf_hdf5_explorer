@@ -122,6 +122,19 @@ class SpectralDialog(W.QDialog):
         self.spectrum_fig, self.spectrum_canvas, self.spectrum_toolbar = self.plot_tab("Spectrum / covariance")
         self.result_fig, self.result_canvas, self.result_toolbar = self.plot_tab("Spatial field / animation")
         self.result_canvas.mpl_connect("button_press_event", self.result_clicked)
+        playback = W.QHBoxLayout()
+        playback.addWidget(W.QLabel("Playback"))
+        self.playback_slider = W.QSlider(C.Qt.Horizontal)
+        self.playback_slider.setAccessibleName("Animation playback frame")
+        self.playback_slider.setRange(0, 0)
+        self.playback_slider.setEnabled(False)
+        self.playback_slider.setToolTip("Seek a frequency or phase frame. Dragging or using the arrow/Home/End keys pauses playback; Play continues from the selected frame.")
+        self.playback_slider.valueChanged.connect(self.seek_animation)
+        self.playback_slider.sliderPressed.connect(self.seek_current_animation_frame)
+        playback.addWidget(self.playback_slider, 1)
+        self.playback_position = W.QLabel("—")
+        playback.addWidget(self.playback_position)
+        self.tabs.widget(2).layout().addLayout(playback)
 
         display = W.QGroupBox("Cached result display")
         df = form_layout(display)
@@ -335,6 +348,7 @@ class SpectralDialog(W.QDialog):
         self.draw_spectrum()
         self.draw_results()
         self.draw_locations()
+        self.update_playback_slider()
         self.invalidate_spectrogram()
 
     def processing_progress(self, done, total):
@@ -598,6 +612,7 @@ class SpectralDialog(W.QDialog):
         self.phase_steps.setEnabled(self.animation_mode.currentIndex() == 1)
         self.draw_spectrum()
         self.draw_results()
+        self.update_playback_slider()
 
     def coordinate_changed(self):
         result = self.current_result()
@@ -612,6 +627,7 @@ class SpectralDialog(W.QDialog):
         self._phase = None
         self._render_key = None
         self.bin_changed()
+        self.update_playback_slider()
 
     def bin_changed(self, *args):
         self.draw_results()
@@ -720,7 +736,7 @@ class SpectralDialog(W.QDialog):
             index[self.data.dims.index(d)] = int(np.argmin(abs(self.data.coords[d]-value)))
         self.trace_picker.set_index(index)
 
-    def prepare_animation(self):
+    def animation_indices(self):
         if self.batch is None:
             raise ValueError("Process All before animating spatial fields.")
         if "covariance" in self.quantity.currentText().lower():
@@ -728,10 +744,33 @@ class SpectralDialog(W.QDialog):
         if self.animation_mode.currentIndex() == 1:
             if self.interpretation.currentText() == "Quantity representation":
                 raise ValueError("Phase animation needs Phase projection or Vector components.")
+            return np.arange(self.phase_steps.value())
+        return self.batch.frequency_indices(self.frequency_start.value(), self.frequency_stop.value(), self.frequency_step.value())
+
+    def update_playback_slider(self):
+        # Discover the sequence without computing its fixed color limits until
+        # the user actually plays or seeks. Long scans stay lazy.
+        try:
+            count = len(self.animation_indices())
+        except ValueError:
+            count = 0
+        blocker = C.QSignalBlocker(self.playback_slider)
+        self.playback_slider.setRange(0, max(0, count-1))
+        self.playback_slider.setPageStep(max(1, count//10))
+        self.playback_slider.setValue(self._animation_position if self._animation_frames is not None else 0)
+        self.playback_slider.setEnabled(count > 1)
+        del blocker
+        if self._animation_frames is None:
+            self.playback_position.setText(f"1 / {count:,}" if count else "—")
+            self.frame_label.setText("Drag Playback to choose a frame, or use Play / Step." if count else
+                                     "Process All and choose a frequency or phase animation to enable Playback.")
+
+    def prepare_animation(self):
+        indices = self.animation_indices()
+        if self.animation_mode.currentIndex() == 1:
             self._animation_frames = [(self.bin_slider.value(), np.deg2rad(self.phase.value()) + 2*np.pi*i/self.phase_steps.value())
-                                      for i in range(self.phase_steps.value())]
+                                      for i in indices]
         else:
-            indices = self.batch.frequency_indices(self.frequency_start.value(), self.frequency_stop.value(), self.frequency_step.value())
             self._animation_frames = [(int(i), np.deg2rad(self.phase.value())) for i in indices]
         # One frame at a time: no space × frequency × phase allocation.
         self._animation_limits = None
@@ -748,6 +787,7 @@ class SpectralDialog(W.QDialog):
             self._animation_limits = plotting.finite_limits(np.array([low, high]))
         self._animation_position = 0
         self._render_key = None
+        self.update_playback_slider()
 
     def show_animation_frame(self):
         i, self._phase = self._animation_frames[self._animation_position]
@@ -755,8 +795,27 @@ class SpectralDialog(W.QDialog):
         self.bin_slider.setValue(i)
         self.bin_slider.blockSignals(False)
         self.bin_changed()
+        blocker = C.QSignalBlocker(self.playback_slider)
+        self.playback_slider.setValue(self._animation_position)
+        del blocker
+        self.playback_position.setText(f"{self._animation_position+1:,} / {len(self._animation_frames):,}")
         self.frame_label.setText(f"{self.animation_mode.currentText()} · frame {self._animation_position+1}/{len(self._animation_frames)}\n"
                                  f"f = {self.batch.frequency[i]:.9g} Hz · phase = {np.rad2deg(self._phase):.5g}°")
+
+    def seek_current_animation_frame(self):
+        self.seek_animation(self.playback_slider.value())
+
+    def seek_animation(self, position):
+        self.stop_play()
+        try:
+            if self._animation_frames is None:
+                self.prepare_animation()
+            self._animation_position = min(max(0, position), len(self._animation_frames)-1)
+            self.show_animation_frame()
+        except ValueError as exc:
+            self._animation_frames = None
+            self.update_playback_slider()
+            self.message.setText(str(exc))
 
     def toggle_play(self):
         if self.timer.isActive():

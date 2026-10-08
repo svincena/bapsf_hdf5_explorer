@@ -5,6 +5,7 @@ import numpy as np
 import h5py
 from .model import Dataset
 from .cancellation import check_canceled
+from .import_progress import ShotProgress
 from .temporal import sample_slice, selection_metadata, sample_times, source_chunk_samples, resample_into
 
 
@@ -296,8 +297,10 @@ def read_lapd(path, selections, control=None, start=0, stop=None, t0=0.0, positi
                 def report(completed):
                     if progress:
                         done = first + len(rows)*completed/len(time)
-                        progress((channel_index*len(shot) + done)*len(time),
-                                 len(selections)*len(shot)*len(time), "Reading / resampling")
+                        finished = first + (len(rows) if completed == len(time) else 0)
+                        progress(channel_index*len(shot) + done, len(selections)*len(shot),
+                                 ShotProgress("Reading / resampling", finished, len(shot),
+                                              channel=channel_index+1, channels=len(selections)))
                 if first == 0:
                     report(0)
                 resample_into(read, signal[first:first+len(rows)], selection, downsampling, progress=report, canceled=canceled)
@@ -335,7 +338,7 @@ def map_motion(records, cases=1, repeats=1, repeat_order="case,shot", decimals=4
     """
     check_canceled(canceled)
     if progress:
-        progress(0, len(records.shots)*2, "Mapping")
+        progress(0, len(records.shots)*2, ShotProgress("Grouping", 0, len(records.shots), phase=2))
     check_canceled(canceled)
     xyz = records.xyz
     if xyz is None or not np.all(np.isfinite(xyz)):
@@ -364,7 +367,7 @@ def map_motion(records, cases=1, repeats=1, repeat_order="case,shot", decimals=4
         key = tuple(int(np.searchsorted(coords[d], xyz[row, i])) for d, i in zip(dims, axes))
         buckets.setdefault(key, []).append(row)
         if progress and (row % 256 == 0 or row+1 == len(xyz)):
-            progress(row+1, len(xyz)*2, "Mapping")
+            progress(row+1, len(xyz)*2, ShotProgress("Grouping", row+1, len(xyz), phase=2))
     if len(buckets) != int(np.prod(shape)):
         raise ValueError("Motion points do not form a complete rectangular grid.")
     mapped = 0
@@ -390,7 +393,8 @@ def map_motion(records, cases=1, repeats=1, repeat_order="case,shot", decimals=4
                     output[n][key][ci, si, time_first:time_last] = a[selected, time_first:time_last]
                 done = mapped+len(selected)*time_last/len(records.time)
                 if progress:
-                    progress(len(xyz)+done, len(xyz)*2, "Mapping")
+                    finished = mapped + (len(selected) if time_last == len(records.time) else 0)
+                    progress(len(xyz)+done, len(xyz)*2, ShotProgress("Mapping", finished, len(xyz), phase=2))
             check_canceled(canceled)
             shotmap[key][ci, si] = records.shots[selected]
             mapped += len(selected)
@@ -430,7 +434,7 @@ def map_manual(records, axes, spatial_units="cm", *, progress=None, canceled=Non
     """axes = [(name, size, start, stop), ...] in slowest-to-fastest order."""
     check_canceled(canceled)
     if progress:
-        progress(0, 1, "Mapping")
+        progress(0, 1, ShotProgress("Mapping", 0, len(records.shots), phase=2))
     check_canceled(canceled)
     dims = tuple(a[0] for a in axes) + ("time",)
     sizes = tuple(a[1] for a in axes)
@@ -440,7 +444,7 @@ def map_manual(records, axes, spatial_units="cm", *, progress=None, canceled=Non
     coords["time"] = records.time
     arrays = {n: a.reshape(sizes + (len(records.time),)) for n, a in records.channels.items()}
     if progress:
-        progress(1, 1, "Mapping")
+        progress(1, 1, ShotProgress("Mapping", len(records.shots), len(records.shots), phase=2))
     check_canceled(canceled)
     return Dataset(arrays, dims, coords, spatial_units=spatial_units, source=records.source,
                    shot_numbers=records.shots.reshape(sizes), metadata=records.metadata,
@@ -469,8 +473,10 @@ def read_raw(path, paths, axes, dt, t0=0, spatial_units="cm", units="V",
             def report(completed, row, rows):
                 if progress:
                     done = row + rows*completed/len(time)
-                    progress((channel_index*count + done)*len(time),
-                             len(paths)*count*len(time), "Reading / resampling")
+                    finished = row + (rows if completed == len(time) else 0)
+                    progress(channel_index*count + done, len(paths)*count,
+                             ShotProgress("Reading / resampling", finished, count,
+                                          channel=channel_index+1, channels=len(paths)))
             report(0, 0, 0)
             if dataset.ndim == 1:
                 resample_into(lambda part: np.asarray(dataset[part], dtype=float)[None, :], a, selection,

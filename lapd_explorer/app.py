@@ -576,7 +576,9 @@ class MainWindow(W.QMainWindow):
             position = ", ".join(f"{d}={self.data.coords[d][opts['slices'][i]]:g} {self.data.spatial_units}"
                                  for i, d in enumerate(self.data.spatial_dims))
             self.cursor.setText((position + "\n" if position else "Point measurement\n") + "Click the spatial plot to select a position.")
-            status = f"{self.data.units}  •  {len(self.data.coords['time']):,} time samples  •  "
+            acquisitions = int(np.prod(self.raw.shape[:-1]))
+            shot_label = "shot (acquisition)" if acquisitions == 1 else "shots (acquisitions)"
+            status = f"{self.data.units}  •  {acquisitions:,} imported {shot_label}  •  "
             if self.data.shot_numbers is not None:
                 key = tuple(opts["case"] if d == "case" else opts["shot"] if d == "shot"
                             else opts["slices"][self.data.spatial_dims.index(d)] for d in self.data.dims[:-1])

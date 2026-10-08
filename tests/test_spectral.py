@@ -322,6 +322,72 @@ def test_gui_geometry_cached_views_intervals_and_animation(app, tmp_path, monkey
     dialog.reject()
 
 
+def test_animation_seek_slider_tracks_frequency_phase_play_step_and_invalidation(app, monkeypatch, tmp_path):
+    from PySide6 import QtWidgets as W
+    from lapd_explorer.spectral_gui import SpectralDialog
+    data, s = acquisition(("y", "x", "shot"), (2, 3, 2))
+    dialog = SpectralDialog(data, ("A", "B"), False, s, {}, "Light")
+    dialog.show()
+    app.processEvents()
+    slider = dialog.playback_slider
+    assert not slider.isEnabled()
+    result = sp.process(data, ("A", "B"), s)
+    dialog.batch_ready(result)
+    def no_fft(*args, **kwargs):
+        pytest.fail("Seeking must use cached spectra")
+    monkeypatch.setattr(sp.signal, "welch", no_fft)
+    dialog.quantity.setCurrentText("Cross-power")
+    dialog.interpretation.setCurrentText("Phase projection")
+    dialog.animation_mode.setCurrentIndex(1)
+    dialog.phase_steps.setValue(8)
+    assert slider.isEnabled() and slider.maximum() == 7
+    assert dialog._animation_frames is None  # Do not compute fixed limits just to enable seeking.
+    slider.triggerAction(W.QAbstractSlider.SliderToMaximum)
+    assert dialog._animation_position == 7 and not dialog.timer.isActive()
+    assert "frame 8/8" in dialog.frame_label.text() and "phase = 315" in dialog.frame_label.text()
+    assert dialog.playback_position.text() == "8 / 8"
+    axis = dialog.result_ax
+    dialog.play.click()
+    assert dialog.timer.isActive() and dialog._animation_position == 7
+    slider.triggerAction(W.QAbstractSlider.SliderSingleStepSub)
+    assert not dialog.timer.isActive() and dialog.play.text() == "Play"
+    assert dialog._animation_position == 6 and dialog.result_ax is axis
+    dialog.play.click()
+    dialog.advance()
+    assert slider.value() == 7 and dialog.playback_position.text() == "8 / 8"
+    dialog.advance()  # Loop wraps both plot and seek position.
+    assert slider.value() == 0 and "phase = 0" in dialog.frame_label.text()
+    dialog.step.click()
+    assert slider.value() == 1 and not dialog.timer.isActive()
+    dialog.animation_mode.setCurrentIndex(0)
+    dialog.frequency_start.setValue(60)
+    dialog.frequency_stop.setValue(76)
+    dialog.frequency_step.setValue(2)
+    assert slider.maximum() == 2
+    slider.triggerAction(W.QAbstractSlider.SliderToMaximum)
+    assert dialog.bin_slider.value() == result.frequency_index(76)
+    assert "f = 76" in dialog.frame_label.text() and slider.value() == 2
+    dialog.loop.setChecked(False)
+    dialog.play.click()
+    dialog.advance()
+    assert not dialog.timer.isActive() and slider.value() == 2
+    dialog.control_tabs.setCurrentIndex(2)
+    app.processEvents()
+    dialog.grab().save(str(tmp_path/"spectral-playback-slider.png"))
+    dialog.quantity.setCurrentText("Cross-covariance")
+    assert not slider.isEnabled() and slider.maximum() == 0
+    dialog.quantity.setCurrentText("Auto-power A")
+    dialog.frequency_stop.setValue(60)
+    assert slider.maximum() == 0 and dialog.playback_position.text() == "1 / 1"
+    dialog.step.click()
+    assert "frame 1/1" in dialog.frame_label.text()
+    assert dialog.batch is result
+    dialog.editor.first.setValue(20)
+    assert dialog.batch is None and not slider.isEnabled()
+    assert dialog.playback_position.text() == "—"
+    dialog.reject()
+
+
 def test_main_selection_worker_persistence_and_preprocessing(app, monkeypatch):
     from lapd_explorer.app import MainWindow
     from lapd_explorer.spectral_gui import SpectralDialog

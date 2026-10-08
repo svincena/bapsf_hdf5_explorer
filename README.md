@@ -204,9 +204,14 @@ HDF5 data:
   uses their center times. An incomplete trailing block is discarded. Averaging
   has weaker anti-alias suppression than FIR. All methods require at least
   two output samples, and their settings are recorded in saved metadata.
-- During import, a progress bar and counts show samples processed and remaining,
-  followed by mapping progress. Progress measures work completed, not estimated
-  time remaining.
+- During import, counts show shots (acquisitions) processed and remaining for
+  the current channel, followed by grouping/mapping counts. A shot counts as
+  processed once its entire selected trace is read and resampled. The progress
+  bar also advances within long traces and across channels; it measures work
+  completed, not estimated time remaining. After loading, the main status bar
+  shows the total imported acquisitions across locations, cases, and repeats,
+  counting each acquisition once regardless of channel count. This original
+  count stays visible when processing averages shots.
 - **Cancel** stops reading, resampling, and mapping at the next bounded chunk,
   discards partial results, and closes the importer automatically after workers
   release their files and buffers. A native read already in progress finishes
@@ -462,6 +467,10 @@ global shot, or click the **Locations** plot. The persistent **Previous/Next**
 controls cycle through traces, locations, shots, or cases. **Make spectrogram**
 opens a time-frequency view with separate estimation and display options; saved
 NPZ files preserve complex cross-power and all trace/settings metadata.
+
+Spectral animations include a **Playback** seek slider beneath the spatial
+field plot. It tracks Play/Step and lets you scrub frequency or phase frames
+using cached results. Seeking pauses playback; Play resumes from that frame.
 
 See [Spectral Analysis](docs/spectral.md) for the complete workflow,
 normalization, sign conventions, shot averaging, and amplitude interpretation.

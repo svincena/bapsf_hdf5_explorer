@@ -125,6 +125,16 @@ skipping every Nth bin. **Phase at fixed frequency** uses N equally spaced phase
 over one cycle, without duplicating the endpoint. The phase control supplies the
 fixed phase or starting phase, respectively.
 
+The **Playback** slider below **Spatial field / animation** seeks directly to
+a frequency or phase frame after **Process All**. It follows **Play** and
+**Step frame**, displays the current frame number, and respects the selected
+frequency bounds/bin stride or phase-frame count. Dragging or using the slider's
+arrow, Home, and End keys pauses playback; **Play** continues from that frame.
+The frame label in **Animate** reports its actual frequency and phase. Seeking
+uses cached spectra and preserves the fixed animation color range. The slider
+is disabled before batch results are available, for covariance, and when only
+one frame is available.
+
 **Quantity representation** sweeps scalar magnitudes, phases, coherence, or other
 selected display values. **Phase projection**, with amplitude **Quantity**, uses
 `real(conj(Z) * exp(i*phase))` for complex cross-power or coherency. With amplitude

@@ -941,10 +941,42 @@ def test_import_downsampling_choices_summary_and_progress(app, tmp_path):
     assert dialog.temporal_options() == dict(decimation=1)
     dialog.update_import_progress(750, 1000, "Reading / resampling")
     assert dialog.import_progress.value() == 750
+    assert "750 / 1,000 shots (acquisitions)" in dialog.progress_detail.text()
     assert "250 remaining" in dialog.progress_detail.text()
-    dialog.update_import_progress(1, 2, "Mapping")
+    from lapd_explorer.import_progress import ShotProgress
+    dialog.update_import_progress(1, 2, ShotProgress("Reading / resampling", 0, 1, channel=2, channels=2))
     assert dialog.import_progress.value() == 500
-    assert "50% remaining" in dialog.progress_detail.text()
+    assert "channel 2/2: 0 / 1 shots (acquisitions)" in dialog.progress_detail.text()
+    assert "1 remaining" in dialog.progress_detail.text()
+    assert "samples" not in dialog.progress_detail.text()
+    dialog.update_import_progress(7, 12, ShotProgress("Mapping", 0, 6, phase=2))
+    assert "Stage 2/2" in dialog.import_progress.format()
+    assert "0 / 6 shots (acquisitions)" in dialog.progress_detail.text()
     dialog.failed("Read failed")
     assert dialog.import_progress.isHidden() and dialog.load.isEnabled()
     dialog.reject()
+
+
+def test_status_bar_counts_imported_acquisitions_once_and_retains_count_after_averaging(app, tmp_path):
+    import h5py
+    from lapd_explorer import io
+    from lapd_explorer.model import preprocess
+    path = tmp_path/"acquisitions.h5"
+    with h5py.File(path, "w") as f:
+        f["A"] = np.ones((2, 3, 2, 4, 17))
+        f["B"] = np.ones((2, 3, 2, 4, 17))
+    axes = [("y", 2, 0, 1), ("x", 3, 0, 2), ("case", 2, 0, 1), ("shot", 4, 0, 3)]
+    imported = io.read_raw(path, {"A": "A", "B": "B"}, axes, .001)
+    w = MainWindow()
+    w.set_data(imported)
+    w.draw()
+    assert "48 imported shots (acquisitions)" in w.statusBar().currentMessage()
+    assert "samples" not in w.statusBar().currentMessage()
+    w.processed(preprocess(imported, average=True))
+    w.draw()
+    assert "shot" not in w.data.dims
+    assert "48 imported shots (acquisitions)" in w.statusBar().currentMessage()
+    w.set_data(Dataset({"A": np.ones(17)}, ("time",), {"time": np.arange(17.)}))
+    w.draw()
+    assert "1 imported shot (acquisition)" in w.statusBar().currentMessage()
+    w.close()

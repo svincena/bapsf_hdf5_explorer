@@ -185,8 +185,10 @@ def test_raw_resampling_methods_coordinates_metadata_and_progress(tmp_path, meth
     if method == "average":
         assert meta["discarded trailing samples"] == 3
     assert method in result.history[-1]
-    assert progress[-1] == (1, 1, "Mapping")
-    reads = [done/total for done, total, stage in progress if stage != "Mapping"]
+    from lapd_explorer.import_progress import ShotProgress
+    assert progress[-1] == (1, 1, ShotProgress("Mapping", 6, 6, phase=2))
+    reads = [done/total for done, total, stage in progress if stage.phase == 1]
+    assert all(stage.total == 6 for _, _, stage in progress)
     assert reads == sorted(reads) and reads[-1] == 1
 
 
@@ -203,9 +205,32 @@ def test_filtered_lapd_matches_calibrated_reference(tmp_path, digitizer, method)
         reference = f.read_data(spec["board"], spec["channel"], **opts)
     crop = reference["signal"][:, 3:254]
     expected = resample_poly(crop, 1, 4, axis=-1) if method == "polyphase" else crop[:, :248].reshape(12, 62, 4).mean(axis=-1)
-    result = io.read_lapd(path, {"A": spec}, sample_limits=(3, 253), decimation=4, downsampling=method)
+    progress = []
+    result = io.read_lapd(path, {"A": spec}, sample_limits=(3, 253), decimation=4, downsampling=method,
+                          progress=lambda *args: progress.append(args))
     np.testing.assert_allclose(result.channels["A"], expected, atol=1e-6, rtol=2e-6)
     assert result.channels["A"].dtype == np.float32
+    assert progress[0][2].completed == 0 and progress[-1][2].completed == 12
+    assert all(total == stage.total == 12 for _, total, stage in progress)
+
+
+def test_multichannel_import_progress_counts_acquisitions_and_keeps_partial_work(tmp_path):
+    path = tmp_path/"progress.h5"
+    values = np.arange(2*3*200001., dtype=float).reshape(2, 3, 200001)
+    with h5py.File(path, "w") as f:
+        f["A"] = values
+        f["B"] = values
+    reports = []
+    io.read_raw(path, {"A": "A", "B": "B"}, [("x", 2, 0, 1), ("shot", 3, 0, 2)],
+                1e-6, decimation=4, progress=lambda *args: reports.append(args))
+    reading = [(done, total, stage) for done, total, stage in reports if stage.phase == 1]
+    fractions = [done/total for done, total, _ in reading]
+    assert fractions == sorted(fractions) and fractions[-1] == 1
+    assert any(done > 0 and stage.completed == 0 for done, _, stage in reading if stage.channel == 1)
+    for channel in (1, 2):
+        stages = [stage for _, _, stage in reading if stage.channel == channel]
+        assert stages[0].completed == 0 and stages[-1].completed == 6
+        assert all(stage.total == 6 and stage.channels == 2 for stage in stages)
 
 
 def test_large_average_blocks_stay_bounded_and_require_complete_blocks():
