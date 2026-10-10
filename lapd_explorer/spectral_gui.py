@@ -9,6 +9,7 @@ from . import spectral as analysis, plotting
 from . import spectrogram
 from .spectrogram_gui import Controls as SpectrogramControls
 from .trace_picker import TracePicker
+from .plot_zoom import PlotZoom
 from .appearance import FacilityLogo, colors
 from .langmuir_gui import IntervalEditor, TraceView
 from .widgets import ScientificDoubleSpinBox, Worker, VectorArrowControls, combo, colormap_combo, spin, form_layout
@@ -42,6 +43,7 @@ class SpectralDialog(W.QDialog):
         self.spectrogram_timer.timeout.connect(lambda: self.process_spectrogram(show=False))
         self.cancel_event = threading.Event()
         self._render_key = None
+        self._plot_zoom = {name: PlotZoom() for name in ("spectrum", "result", "locations", "spectrogram")}
         self._animation_frames = None
         self._animation_position = 0
         self._phase = None
@@ -254,6 +256,9 @@ class SpectralDialog(W.QDialog):
         layout.addLayout(buttons)
         self.progress.connect(self.processing_progress)
         self.trace_view.selected.connect(self.editor.set_interval)
+        # Commit a pending toolbar zoom/analysis interval before changing trace.
+        self.trace_picker.previous.pressed.connect(self.trace_view.flush_limits)
+        self.trace_picker.next.pressed.connect(self.trace_view.flush_limits)
         self.editor.changed.connect(self.window_changed)
         for widget in (self.nperseg, self.nfft, self.overlap, self.max_lag):
             widget.valueChanged.connect(self.settings_changed)
@@ -304,6 +309,8 @@ class SpectralDialog(W.QDialog):
 
     def settings_changed(self, *args):
         self.stop_play()
+        for view in self._plot_zoom.values():
+            view.clear()
         self.collect()
         self.batch = self.point = None
         self._animation_frames = None
@@ -437,6 +444,10 @@ class SpectralDialog(W.QDialog):
     def draw_spectrogram(self, *args):
         if not hasattr(self, "spectrogram_canvas"):
             return
+        view = self._plot_zoom["spectrogram"]
+        view.capture(self.spectrogram_fig, (self.spectrogram_controls.sides.currentText(),
+                     self.spectrogram_controls.log_frequency.isChecked(),
+                     self.spectrogram_controls.frequency_min.value(), self.spectrogram_controls.frequency_max.value()))
         self.spectrogram_controls.export.setEnabled(self.spectrogram_result is not None)
         if self.spectrogram_result is None:
             self.spectrogram_fig.clear()
@@ -448,7 +459,7 @@ class SpectralDialog(W.QDialog):
             return
         try:
             self.spectrogram_controls.render(self.spectrogram_result, self.spectrogram_fig, self.appearance)
-            self.spectrogram_toolbar.update()
+            view.restore(self.spectrogram_fig, self.spectrogram_toolbar)
             self.spectrogram_canvas.draw_idle()
         except ValueError as exc:
             self.message.setText(str(exc))
@@ -472,6 +483,8 @@ class SpectralDialog(W.QDialog):
     def draw_locations(self):
         if not hasattr(self, "location_canvas"):
             return
+        view = self._plot_zoom["locations"]
+        view.capture(self.location_fig, self.data.spatial_dims)
         self.location_fig.clear()
         self.location_fig.set_facecolor(colors(self.appearance)["bg"])
         self.location_ax = ax = self.location_fig.add_subplot(111)
@@ -502,7 +515,7 @@ class SpectralDialog(W.QDialog):
             ax.set(xlabel=f"{d} ({self.data.spatial_units})", ylabel=f"{self.names[0]} ({self.data.units})")
         ax.set_title(f"Click a location · {self.names[0]} at {self.data.coords['time'][sample]*1000:g} ms\n"
                      f"case index {case} · shot index {shot}")
-        self.location_toolbar.update()
+        view.restore(self.location_fig, self.location_toolbar)
         self.location_canvas.draw_idle()
 
     def location_clicked(self, event):
@@ -639,6 +652,9 @@ class SpectralDialog(W.QDialog):
 
     def draw_spectrum(self):
         result = self.current_result()
+        view = self._plot_zoom["spectrum"]
+        view.capture(self.spectrum_fig, (self.quantity.currentText(), self.representation.currentText(),
+                     self.degrees.isChecked(), self.frequency_start.value(), self.frequency_stop.value()))
         self.spectrum_fig.clear()
         if result is None:
             self.spectrum_canvas.draw_idle()
@@ -657,7 +673,7 @@ class SpectralDialog(W.QDialog):
                ylabel=result.units(q, kind, degrees), title=f"{q} · {', '.join(self.names)}\n{self.location.text()}")
         if not covariance and self.frequency_start.value() < self.frequency_stop.value():
             ax.set_xlim(self.frequency_start.value(), self.frequency_stop.value())
-        self.spectrum_toolbar.update()
+        view.restore(self.spectrum_fig, self.spectrum_toolbar)
         self.spectrum_canvas.draw_idle()
 
     def frame(self, result, bin_index, phase=None):
@@ -683,6 +699,9 @@ class SpectralDialog(W.QDialog):
 
     def draw_results(self):
         result = self.current_result()
+        view = self._plot_zoom["result"]
+        view.capture(self.result_fig, (self.quantity.currentText(), self.representation.currentText(),
+                     self.degrees.isChecked(), self.interpretation.currentText(), self.amplitude.currentText()))
         if result is None:
             self.result_fig.clear()
             self.result_canvas.draw_idle()
@@ -708,6 +727,7 @@ class SpectralDialog(W.QDialog):
             key += (tuple(self.arrow_style.settings().items()),)
             if self._render_key == key:
                 self.result_fig._lapd_update_derived(data, title)
+                view.updated(self.result_fig)
             else:
                 self.result_ax = plotting.render_derived(
                     self.result_fig, data, next(iter(data.channels)),
@@ -719,7 +739,7 @@ class SpectralDialog(W.QDialog):
                     arrow_cmap=self.parent().arrow_cmap.currentText() if hasattr(self.parent(), "arrow_cmap") else "Solid white",
                     arrow_settings=self.arrow_style.settings())
                 self._render_key = key
-                self.result_toolbar.update()
+                view.restore(self.result_fig, self.result_toolbar)
             self.result_canvas.draw_idle()
         except (ValueError, IndexError) as exc:
             self.message.setText(str(exc))
@@ -862,6 +882,8 @@ class SpectralDialog(W.QDialog):
 
     def reset_view(self):
         self.stop_play()
+        for view in self._plot_zoom.values():
+            view.clear()
         # Reset navigation while preserving estimator settings and interval.
         self.trace_view.set_interval(self.editor.interval())
         for axis in self.trace_view.axes:

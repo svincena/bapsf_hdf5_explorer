@@ -388,6 +388,88 @@ def test_animation_seek_slider_tracks_frequency_phase_play_step_and_invalidation
     dialog.reject()
 
 
+def test_previous_next_preserve_plot_zoom_and_home_reset_restore_full_views(app):
+    from lapd_explorer.spectral_gui import SpectralDialog
+    from lapd_explorer.plot_zoom import PlotZoom
+    data, s = acquisition(("y", "x", "case", "shot"), (2, 3, 2, 3))
+    data.channels["A"] *= np.array([1., 3., 9.])[None, None, None, :, None]
+    dialog = SpectralDialog(data, ("A", "B"), False, s, {}, "Light")
+    dialog.batch_ready(sp.process(data, ("A", "B"), s))
+    figures = [dialog.spectrum_fig, dialog.result_fig, dialog.location_fig]
+    views = []
+    for fig in figures:
+        view = []
+        for ax in PlotZoom.axes(fig):
+            limits = []
+            for dim in ("x", "y"):
+                low, high = getattr(ax, f"get_{dim}lim")()
+                zoom = (low+(high-low)*.2, high-(high-low)*.2)
+                getattr(ax, f"set_{dim}lim")(*zoom)
+                limits.append(zoom)
+            view.append(limits)
+        views.append(view)
+    for ax in dialog.trace_view.axes:
+        ax.set_ylim(-.5, .5)
+    dialog.trace_picker.cycle_axis.setCurrentText("Shot")
+    for button, expected in [(dialog.trace_picker.next, 1), (dialog.trace_picker.previous, 0)]:
+        button.click()
+        assert dialog.index()[-1] == expected
+        for fig, saved in zip(figures, views):
+            for ax, (xlim, ylim) in zip(PlotZoom.axes(fig), saved):
+                np.testing.assert_allclose(ax.get_xlim(), xlim)
+                np.testing.assert_allclose(ax.get_ylim(), ylim)
+        for ax in dialog.trace_view.axes:
+            np.testing.assert_allclose(ax.get_ylim(), (-.5, .5))
+        expected_spectrum = dialog.batch.displayed(dialog.quantity.currentText(), dialog.representation.currentText(),
+                                                   dialog.degrees.isChecked(), dialog.result_index(dialog.batch))
+        np.testing.assert_allclose(dialog.spectrum_fig.axes[0].lines[0].get_ydata(), expected_spectrum)
+    dialog.trace_picker.cycle_axis.setCurrentText("Location")
+    dialog.trace_picker.next.click()
+    np.testing.assert_allclose(dialog.location_ax.get_xlim(), views[2][0][0])
+    dialog.spectrum_toolbar.home()
+    np.testing.assert_allclose(dialog.spectrum_fig.axes[0].get_xlim(), (0., 512.))
+    dialog.reset_view()
+    for fig, saved in zip(figures, views):
+        assert not np.allclose(PlotZoom.axes(fig)[0].get_xlim(), saved[0][0])
+    dialog.reject()
+
+
+def test_unzoomed_navigation_keeps_autoscaling_after_animation(app):
+    from lapd_explorer.spectral_gui import SpectralDialog
+    data, s = acquisition(("y", "x", "shot"), (2, 3, 2))
+    data.channels["A"][:, :, 1] *= 3
+    dialog = SpectralDialog(data, ("A", "B"), False, s, {}, "Light")
+    dialog.batch_ready(sp.process(data, ("A", "B"), s))
+    dialog.lock.setChecked(False)
+    dialog.frequency_start.setValue(60)
+    dialog.frequency_stop.setValue(64)
+    dialog.step_frame()
+    dialog.step_frame()
+    old_spectrum = dialog.spectrum_fig.axes[0].get_ylim()[1]
+    old_slice = dialog.result_fig.axes[1].get_ylim()[1]
+    dialog.trace_picker.cycle_axis.setCurrentText("Shot")
+    dialog.trace_picker.next.click()
+    assert dialog.spectrum_fig.axes[0].get_ylim()[1] > old_spectrum*5
+    assert dialog.result_fig.axes[1].get_ylim()[1] > old_slice*5
+    dialog.reject()
+
+
+def test_next_commits_pending_input_trace_zoom_before_navigation(app):
+    from lapd_explorer.spectral_gui import SpectralDialog
+    data, s = acquisition(("shot",), (2,))
+    dialog = SpectralDialog(data, ("A", "B"), False, s, {}, "Light")
+    dialog.trace_view.axes[0].set_xlim(100., 600.)
+    assert dialog.trace_view._pending_limits is not None
+    dialog.trace_picker.next.click()
+    assert dialog.index() == (1,)
+    assert .09 < dialog.editor.interval()[0] < .11
+    assert .59 < dialog.editor.interval()[1] < .61
+    for ax in dialog.trace_view.axes:
+        np.testing.assert_allclose(ax.get_xlim(), np.array(dialog.editor.interval())*1000)
+    assert dialog.trace_view._pending_limits is None
+    dialog.reject()
+
+
 def test_main_selection_worker_persistence_and_preprocessing(app, monkeypatch):
     from lapd_explorer.app import MainWindow
     from lapd_explorer.spectral_gui import SpectralDialog

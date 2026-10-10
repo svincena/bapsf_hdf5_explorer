@@ -120,6 +120,12 @@ disabled for covariance; select a lag to inspect its spatial structure.
 
 ### Scalar animations
 
+**Previous/Next** trace navigation preserves zoom and pan in the spectrum,
+spatial field and slice plots, locations map, and spectrogram, including when
+an updated spectrogram arrives in the background. Unzoomed axes still scale
+automatically for each trace. Toolbar **Home** and **Reset View** restore the
+full view; changing quantities or axis domains starts an appropriate new view.
+
 **Frequency at fixed phase** indexes the requested available bins, optionally
 skipping every Nth bin. **Phase at fixed frequency** uses N equally spaced phases
 over one cycle, without duplicating the endpoint. The phase control supplies the

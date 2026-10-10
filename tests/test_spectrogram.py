@@ -269,11 +269,15 @@ def test_gui_worker_cached_displays_live_cycling_and_controls(app, tmp_path, mon
     controls.log_frequency.setChecked(True)
     dialog.spectrogram_canvas.draw()
     assert controls.last_axis.get_yscale() == "log"
+    controls.last_axis.set_xlim(.2, .4)
+    controls.last_axis.set_ylim(30., 200.)
     dialog.trace_picker.cycle_axis.setCurrentText("Shot")
     dialog.trace_picker.next.click()
     wait()
     assert dialog.spectrogram_result.index == (0, 0, 1)
     assert len(observed) == 2
+    np.testing.assert_allclose(controls.last_axis.get_xlim(), (.2, .4))
+    np.testing.assert_allclose(controls.last_axis.get_ylim(), (30., 200.))
     controls.auto_update.setChecked(False)
     dialog.trace_picker.next.click()
     app.processEvents()
