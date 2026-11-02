@@ -17,6 +17,33 @@ def app():
     yield a
 
 
+@pytest.mark.parametrize("description", ["First line\n<literal text> μprobe", ""])
+def test_import_description_viewer(app, tmp_path, monkeypatch, description):
+    import h5py
+    from lapd_explorer import io
+    path = tmp_path/"description.h5"
+    with h5py.File(path, "w") as f:
+        f.create_group("Raw data + config").attrs["Description"] = description
+    dialog = ImportDialog(path, io.inspect_file(path))
+    opened = []
+    def inspect_viewer(viewer):
+        assert viewer.windowTitle() == "HDF5 description"
+        text = viewer.findChild(W.QPlainTextEdit)
+        assert text.isReadOnly()
+        if description:
+            assert description in text.toPlainText()
+            assert "/Raw data + config attribute: Description" in text.toPlainText()
+        else:
+            assert text.toPlainText() == "No HDF5 description is available in this file."
+        opened.append(True)
+        return W.QDialog.Rejected
+    monkeypatch.setattr(W.QDialog, "exec", inspect_viewer)
+    dialog.description_button.click()
+    assert opened
+    assert dialog.dataset is None
+    dialog.reject()
+
+
 def test_colormap_catalog_previews_and_reversed_colors(app):
     from matplotlib import colormaps
     from PySide6 import QtCore as C

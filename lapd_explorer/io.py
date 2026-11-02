@@ -23,8 +23,10 @@ def inspect_file(path):
     from bapsflib import lapd
     channels, controls, datasets = [], [], []
     with h5py.File(path, "r") as f:
+        descriptions = _file_descriptions(f)
         if f.attrs.get("lapd_explorer_format", "") == "1":
-            return {"portable": True, "channels": [], "controls": [], "datasets": []}
+            return {"portable": True, "channels": [], "controls": [], "datasets": [],
+                    "descriptions": descriptions}
         def visit(name, obj):
             if isinstance(obj, h5py.Dataset) and obj.ndim and obj.dtype.kind in "fiu":
                 datasets.append((name, obj.shape))
@@ -47,7 +49,32 @@ def inspect_file(path):
                     controls.extend((name, cfg) for cfg in mapper.configs)
     except Exception as exc:
         error = str(exc)
-    return dict(portable=False, channels=channels, controls=controls, datasets=datasets, error=error)
+    return dict(portable=False, channels=channels, controls=controls, datasets=datasets,
+                error=error, descriptions=descriptions)
+
+
+def _file_descriptions(f):
+    """Read description attributes without requiring successful device mapping."""
+    descriptions = {}
+    sources = [("/", f, {"description": "File description"})]
+    if "Raw data + config" in f:
+        sources.append(("/Raw data + config", f["Raw data + config"], {
+            "description": "Run description",
+            "experiment description": "Experiment description",
+            "experiment set description": "Experiment set description",
+        }))
+    for path, group, fields in sources:
+        for key, value in group.attrs.items():
+            label = fields.get(key.lower())
+            if label is None:
+                continue
+            values = np.asarray(value).reshape(-1)
+            lines = [item.decode("utf-8", errors="replace") if isinstance(item, bytes)
+                     else str(item) for item in values]
+            text = "\n".join(lines).strip()
+            if text:
+                descriptions[label] = dict(text=text, source=f"{path} attribute: {key}")
+    return descriptions
 
 
 def _sis_channel_description(f, mapper, spec):

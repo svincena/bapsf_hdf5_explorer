@@ -170,6 +170,11 @@ controls through `bapsflib`. Multiple channels must have compatible record and
 time axes. Use Command-click on macOS or Ctrl-click on Windows/Linux to select
 several channels.
 
+Select **View HDF5 description…** in the import window to read and copy the
+file's run, experiment, and experiment-set descriptions before loading data.
+The scrollable viewer also shows a root-level file description when present,
+and reports when no description is available.
+
 For SIS 3302 and SIS 3305 channels, nonblank user-entered **Data type**
 descriptions become the imported channel names used in selectors and plots.
 The import and preview lists show the description alongside the board/channel

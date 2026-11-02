@@ -170,6 +170,10 @@ class ImportDialog(W.QDialog):
         title.setObjectName("sectionTitle")
         header.addWidget(title)
         header.addStretch()
+        self.description_button = W.QPushButton("View HDF5 description…")
+        self.description_button.setToolTip("Read the file's run and experiment descriptions before importing.")
+        self.description_button.clicked.connect(self.show_description)
+        header.addWidget(self.description_button)
         appearance = parent.appearance.currentText() if parent is not None and hasattr(parent, "appearance") else "Light"
         self.facility_logo = FacilityLogo(appearance, height=46)
         header.addWidget(self.facility_logo)
@@ -363,6 +367,27 @@ class ImportDialog(W.QDialog):
         self.tabs.currentChanged.connect(self.update_mapping_fields)
         self.update_mapping_fields()
         C.QTimer.singleShot(0, self.request_guess)
+
+    def show_description(self):
+        dialog = W.QDialog(self)
+        dialog.setWindowTitle("HDF5 description")
+        dialog.resize(720, 520)
+        layout = W.QVBoxLayout(dialog)
+        path = W.QLabel(str(self.path))
+        path.setWordWrap(True)
+        path.setTextFormat(C.Qt.PlainText)
+        path.setTextInteractionFlags(C.Qt.TextSelectableByMouse)
+        layout.addWidget(path)
+        text = W.QPlainTextEdit()
+        text.setReadOnly(True)
+        sections = [f"{label}\n{entry['source']}\n\n{entry['text']}"
+                    for label, entry in self.info.get("descriptions", {}).items()]
+        text.setPlainText("\n\n".join(sections) or "No HDF5 description is available in this file.")
+        layout.addWidget(text)
+        buttons = W.QDialogButtonBox(W.QDialogButtonBox.Close)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.exec()
 
     def update_mapping_fields(self):
         manual = self.tabs.currentIndex() == 1 or self.mapping.currentIndex() == 1

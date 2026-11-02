@@ -18,6 +18,33 @@ def forbid_signal_reads(monkeypatch):
         "Shot estimation must not call the signal reader"))
 
 
+def test_file_descriptions_survive_failed_device_discovery(tmp_path, monkeypatch):
+    path = tmp_path/"description.h5"
+    with h5py.File(path, "w") as f:
+        f.attrs["description"] = "Root notes"
+        attrs = f.create_group("Raw data + config").attrs
+        attrs["Description"] = np.bytes_("First line\nSecond line")
+        attrs["Experiment description"] = "Magnetic μprobe scan"
+        attrs["Experiment set description"] = np.array([b"Set notes"])
+        f.create_dataset("signal", shape=(4, 16), dtype=float)
+    forbid_signal_reads(monkeypatch)
+    def fail_mapping(*args, **kwargs):
+        raise ValueError("Unsupported device")
+    monkeypatch.setattr(lapd, "File", fail_mapping)
+    info = inspect_file(path)
+    assert info["error"] == "Unsupported device"
+    assert info["descriptions"]["Run description"] == {
+        "text": "First line\nSecond line", "source": "/Raw data + config attribute: Description"}
+    assert info["descriptions"]["Experiment description"]["text"] == "Magnetic μprobe scan"
+    assert info["descriptions"]["Experiment set description"]["text"] == "Set notes"
+    assert info["descriptions"]["File description"]["text"] == "Root notes"
+    with h5py.File(path, "r+") as f:
+        del f.attrs["description"]
+        for key in list(f["Raw data + config"].attrs):
+            f["Raw data + config"].attrs[key] = " \n "
+    assert inspect_file(path)["descriptions"] == {}
+
+
 @pytest.mark.parametrize("adc,channel,field", [
     ("SIS 3302", 8, "Data type 8"),
     ("SIS 3305", 1, "FPGA 1 Data type 1"),
