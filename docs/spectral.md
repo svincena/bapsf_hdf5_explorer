@@ -7,12 +7,24 @@ signals; Magnitude/Vector modes identify vector components. The tool analyzes
 the selected channel waveforms, not the absolute value or magnitude displayed
 by the browser. Two-dimensional geometry is required for vector arrows.
 
-The input is the browser's **currently processed dataset**, including applied
-gain, integration, smoothing, baseline correction, and shot averaging. Unapplied
-checkbox changes in the main window have no effect. The dialog displays that
-processing history. Imported channels already share dimensions, shot numbers,
-motion coordinates, and sample intervals; the importer rejects incompatible
-channels. Spectral analysis additionally requires a uniform, finite time base.
+The input is the browser's **currently processed dataset**. Per-trace gain,
+integration, time filtering, and baseline correction are retained. **Waveform
+shot averages and spatially filtered scan waveforms are rejected**: reset those
+operations in the main browser and average spectra here instead. These mixtures
+can cancel fluctuations or introduce cross-products between different acquired
+records. Spatially filtered datasets also lose their original global-shot map.
+Unapplied checkbox changes have no effect; the dialog shows processing history.
+
+Import requires matching dimensions, global shot IDs, motion coordinates, and
+sample intervals across channels. Spectral analysis also requires a finite,
+uniform time base. These checks do not establish equal hardware trigger delays
+or instrument phase response. The shared Dataset has one unit for all channels,
+and main preprocessing applies the same operation to each. Analysis of digitizer
+volts is supported; interpretation as plasma variables requires appropriate
+calibration first. Heterogeneous physical quantities require independent
+calibration/preprocessing and a model with per-channel units; this interface
+does not provide those conversions. Selecting two channels does not establish
+that they are compatible vector components.
 
 ## Workflow
 
@@ -29,6 +41,12 @@ channels. Spectral analysis additionally requires a uniform, finite time base.
    rounded down, with a minimum of one worker.
    Select one for serial FFTs. More workers can help larger jobs but may slow
    small jobs; compare processing times on representative data.
+   Initial GUI window lengths use the largest power of two no greater than
+   two-thirds of the record (minimum four samples), rather than always 256.
+   Choose duration for the oscillation periods and stationary interval of
+   interest. The controls report duration, FFT spacing, window noise bandwidth,
+   segment count, and approximate independent averaging support. At 100 MHz,
+   256 samples span only 2.56 microseconds and cannot resolve a 100 kHz mode.
 3. **Process This Point/Shot** previews that location. **Process All** computes
    every position, case, and stored repeat in a background worker, with progress
    and cancellation. Nonfinite input or numerical failures at a location produce
@@ -42,12 +60,23 @@ channels. Spectral analysis additionally requires a uniform, finite time base.
    Play/Pause, Step frame, frame rate, and loop controls operate on cached arrays.
    The title and frame indicator report actual frequency and artificial phase.
 
-With **Average stored shots before spectra** disabled, each repeat is processed
-independently. Enabled, the waveforms are averaged at each position/case before
-estimation and the shot axis is removed. This is distinct from averaging spectra:
-opposite-phase shots can cancel. If the main browser already averaged the shots,
-the original repeats are unavailable to this dialog; reset main processing to
-analyze them individually.
+With **Average spectra over matched shots** disabled, each repeat is processed
+independently. Enabled, each shot's auto/cross spectra and covariances are
+calculated first, then averaged at each position/case; the result's shot axis is
+removed. Coherence and phase are derived from that averaged spectral matrix.
+All products use the same valid shot pairs: if either channel fails, that pair
+is omitted together. Counts and failures are reported; locations with no valid
+pairs remain NaN. Opposite-phase shots retain their fluctuation power and no
+cross-products between different shots are introduced. Coherent phasors are
+also averaged, but displaying them requires the common-reference confirmation
+described below. The input preview always shows the selected individual shot,
+which is also the input to its spectrogram.
+
+Waveform averaging estimates a phase-locked mean response, a different physical
+quantity from ensemble fluctuation power. That workflow is not provided in this
+dialog; it cannot recover original fluctuation statistics from already mixed
+data. To combine scan locations for a power map, estimate per-record spectra
+first and smooth the derived quantities with an explicitly chosen support.
 
 **Reset View** resets navigation while keeping the analysis interval and settings.
 **Exit to Main** retains the dialog, controls, and calculated results. Reopening
@@ -82,10 +111,13 @@ Windows are SciPy's periodic/DFT-even windows.
 
 Mean and bias-corrected median segment estimates follow SciPy. For complex median
 estimates, SciPy takes real and imaginary medians separately. These robust
-estimates need not yield a positive-semidefinite spectral matrix; resulting
-coherence can exceed one and is deliberately not clipped. Mean averaging is the
-default. With only one segment, nonzero two-signal coherence is identically one;
-multiple segments are necessary for a useful statistical estimate.
+estimates need not yield a positive-semidefinite spectral matrix. Their
+coherency/coherence and reliable phase therefore return NaN; median auto/cross
+spectra remain available. Mean averaging is the default. A single independent
+estimate also produces NaN coherence, avoiding the algebraic value one that
+would otherwise appear even for unrelated signals. Multiple independently
+acquired shots can supply averaging support for a single-segment-per-shot
+ensemble.
 
 ```
 complex coherency = S_AB / sqrt(S_AA * S_BB)
@@ -96,7 +128,21 @@ cross-phase = arg(S_AB)
 **Positive cross-phase means B leads A**: for `A=cos(ωt)` and
 `B=cos(ωt+θ)`, the measured phase is `+θ`. Phase is undefined where cross-power
 vanishes; those values are NaN. Coherency is NaN when its power denominator is
-zero. Phase displays can use radians or degrees. Complex cross-power and
+zero. Welch phase displays additionally mask bins below an approximate 95%
+pointwise null-coherence threshold. For K segments, hop H, and window w, the
+approximate independent count per shot is
+
+```
+rho_m = sum(w[n] * w[n + m*H]) / sum(w**2)
+K_eff = K / (1 + 2*sum_m((1 - m/K) * rho_m**2))
+threshold = 1 - 0.05**(1 / (valid_shots*K_eff - 1))
+```
+
+Only overlapping window offsets contribute. This approximation assumes
+stationarity, Gaussian spectral statistics, and independent experimental shots;
+it does not prove those assumptions, correct for searching many frequencies,
+or measure instrument uncertainty. Raw complex cross-power remains available
+for further analysis. Phase displays can use radians or degrees. Cross-power and
 coherency stay complex in memory; magnitude, phase, real, imaginary, and squared
 magnitude are display transformations. Squared cross-power has squared PSD
 units and is not another PSD.
@@ -143,17 +189,20 @@ one frame is available.
 
 **Quantity representation** sweeps scalar magnitudes, phases, coherence, or other
 selected display values. **Phase projection**, with amplitude **Quantity**, uses
-`real(conj(Z) * exp(i*phase))` for complex cross-power or coherency. With amplitude
-**A** or **B**, it instead uses
+`real(conj(Z) * exp(i*phase))` for complex cross-power or coherency. This is
+explicitly labeled an artificial projection, not a physical waveform.
+
+With amplitude **A** or **B**, it uses the corresponding coherent peak phasor:
 
 ```
-sqrt(S_AA or S_BB) * cos(phase - arg(S_AB))
+real(F_component * exp(i*phase))
 ```
 
-Here the amplitude is an **amplitude spectral density**, in `input-unit/√Hz`,
-not a reconstructed physical oscillation amplitude. The GUI identifies the
-amplitude source. The animation is an artificial phase visualization and does
-not claim to reconstruct the original waveform.
+These amplitudes are in input units, preserve each component's own phase, and
+use exactly the same estimator as vector animations. They require the
+**Calibrated components; shared phase reference** confirmation.
+Two quadrature components remain in quadrature; their relative phase is not
+replaced with the same cross-phase for both components.
 
 ### Vector animations
 
@@ -177,20 +226,33 @@ exceptions apply. The common clock is the selected interval's first sample.
 `real(F_B*exp(i*phase))` in the assigned horizontal/vertical directions, in input
 units. Its positive artificial phase advances the ordinary cosine phasors in
 time; this differs deliberately from the scalar *cross-phase referenced*
-projection above. Separate component phases preserve polarization and spatial
+Quantity projection above. Separate component phases preserve polarization and spatial
 phase variation. Incoherent fluctuations may average away in these coherent
 phasors while remaining visible in Welch power. The plot explicitly says
 “Coherent peak vector”; this is a phase-coherent estimator, not `sqrt(PSD)`.
+
+The component/vector controls are disabled until the common-reference
+confirmation is selected. This means compatible calibrated observables and
+component directions, synchronized channels, and phase registration across all
+compared positions/shots. A shared trigger sample does not establish phase
+locking of spontaneous fluctuations in different discharges. An off-bin mode
+can also cancel over the complete analysis interval even while its Welch power
+is large. Use these amplitudes for coherent modes with an established reference;
+they are not total fluctuation amplitudes or a generic polarization estimator.
+Changing the input dataset, channel pair, or scalar/vector assignment resets
+this confirmation; reopening the same analysis retains it.
 
 ## Storage and reuse
 
 `spectral.Settings`, `spectral.process`, and `spectral.Result` are independent of
 Qt. The result keeps the original geometry and case/shot axes, explicit frequency
 and lag coordinates, complex cross-power, coherent component phasors, and a
-failure list. Coherency and phase derive from cached spectra only when needed.
-Point processing selects traces before repeat averaging. Full processing uses
+failure list and valid matched-shot counts. Coherency and phase derive from
+cached spectra only when needed. Point processing selects the location/case
+before accumulating its per-shot estimates. Full processing uses
 bounded vectorized chunks to limit temporary STFT memory. Persistent output
-memory still scales with the number of locations/shots and requested bins.
+memory scales with result locations and bins. Ensemble mode accumulates directly
+into the reduced result; it does not allocate a full per-shot spectral cube.
 Chunks remain sequential; SciPy FFT workers parallelize independent transforms
 inside a batch. The worker setting is scoped to the analysis thread and restored
 when processing finishes, fails, or is canceled. Cancellation remains available
@@ -216,9 +278,10 @@ Choose one channel for auto-power, or two channels for cross-power, then click
 **Make spectrogram**. Two-channel results also retain each channel's auto-power.
 The **Spectrogram** control tab has **Estimation** and **Display** pages. It uses
 the shared analysis interval from **Estimate / Input traces**, with one stored
-trace at the selected location, case and shot. The Welch **Average stored shots**
-option does not apply to spectrograms. Any averaging already applied in the main
-browser remains part of the input, as identified by its processing history.
+trace at the selected location, case and shot. The Welch **Average spectra over
+matched shots** option does not apply to spectrograms or the input-trace preview.
+Already mixed waveforms are rejected here as well. Auto-power A is the initial
+display quantity, including for two-channel inputs.
 
 **Trace** provides several synchronized ways to select that time series:
 
@@ -284,6 +347,12 @@ the existing CSD convention. Complete-window estimates averaged over time agree
 with mean Welch/CSD for the same settings. No coherence estimate is implied by a
 single unsmoothed time-frequency window.
 
+In fact, each such pixel obeys `abs(P_AB) = sqrt(P_AA * P_BB)`, even for
+independent signals. Cross-periodogram magnitude alone is not evidence of
+coupling. The plot identifies these products as unaveraged; phase here is a raw
+single-window phase, without the Welch reliability mask. Use averaged complex
+cross-power and supported coherence to assess statistical coupling.
+
 Time coordinates identify the central sample, `floor(segment_samples/2)`, of
 each window, using the imported time origin. This follows the ShortTimeFFT
 sample-center convention; for odd-length segments it is half a sample earlier
@@ -305,15 +374,19 @@ linear, logarithmic, symmetric log (with threshold), and dB scales; reference
 power, dB dynamic range, colormap, and automatic or fixed color limits are
 editable. Signed and phase displays use linear or symmetric-log color, rather
 than taking logarithms of signed values. Power dB is `10 log10(P/reference)`;
-the reference uses the selected quantity's units. Display clipping does not
-alter stored estimates. Frequency limits and a logarithmic frequency axis are
+the reference uses the selected quantity's units. Color limits are applied only
+by the plot normalization, and automatic limits use the visible frequency band.
+A strong excluded-frequency peak therefore cannot flatten weaker peaks inside
+the displayed band. Numerical dB values and stored estimates are not clipped.
+Frequency limits and a logarithmic frequency axis are
 available; the latter requires a one-sided result and excludes DC.
 
 The plot toolbar supports zoom, pan, and image export. **Save spectrogram data…**
 creates an NPZ archive containing `time` (seconds), `frequency` (Hz),
 `Auto_power_A`, and, for two channels, `Auto_power_B` and complex `Cross_power`.
 Its JSON `metadata` records channel names, trace index, coordinates, global shot,
-units, source, preprocessing history, estimator settings, and the phase/time
+units, source, acquisition metadata (including temporal resampling information),
+preprocessing history, estimator settings, and the phase/time
 conventions. It can be loaded with `numpy.load(path, allow_pickle=False)`.
 Saving is atomic and does not replace the main browser dataset.
 

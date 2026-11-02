@@ -132,9 +132,20 @@ def preprocess(data, *, average=False, baseline="None", integrate=False, gain=1.
         details = ", ".join(f"{k}={settings[k]}" for k in (parameter, "mode", "nan_policy"))
         steps.append(f"Spatial averaging: {settings['method']} ({details}; "
                      f"grid points along {', '.join(data.spatial_dims)})")
+        # A spatially filtered scan trace combines different acquired records.
+        # Its original shot ID no longer identifies the displayed waveform.
+        shots = None
+    metadata = dict(data.metadata)
+    mixing = list(metadata.get("waveform_mixing", []))
+    if average and "shot" in data.dims:
+        mixing.append("shots")
+    if spatial_averaging is not None:
+        mixing.append("positions")
+    if mixing:
+        metadata["waveform_mixing"] = sorted(set(mixing))
     return replace(data, channels=out, dims=dims, coords=coords,
                    units=f"{data.units}·s" if integrate else data.units,
-                   shot_numbers=shots, history=data.history + tuple(steps))
+                   shot_numbers=shots, history=data.history + tuple(steps), metadata=metadata)
 
 
 def quantity(data, names, mode, case=0, shot=0):

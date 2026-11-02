@@ -115,14 +115,14 @@ def test_geometry_bad_traces_shots_and_point_processing(dims, shape):
         sp.process(data, ("A", "B"), s, canceled=lambda: True)
 
 
-def test_averaging_waveforms_is_not_averaging_power():
+def test_ensemble_averages_power_without_canceling_opposite_phase_shots():
     data, s = acquisition(("shot",), (2,))
     data.channels["A"][1] = -data.channels["A"][0]
     individual = sp.process(data, ("A",), s)
     s.average_shots = True
     averaged = sp.process(data, ("A",), s)
     assert individual.values("Auto-power A").max() > 0
-    assert averaged.values("Auto-power A").max() == 0
+    np.testing.assert_allclose(averaged.values("Auto-power A"), individual.values("Auto-power A").mean(axis=0))
     point = sp.process(data, ("A",), s, index=(1,))
     np.testing.assert_array_equal(point.values("Auto-power A"), averaged.values("Auto-power A"))
 
@@ -199,6 +199,7 @@ def test_estimator_failure_isolated_and_input_selection_validation(monkeypatch):
 
 def test_animation_preserves_polarization_and_spatial_phase():
     data, s = acquisition(("y", "x"), (2, 3), phase=np.pi/2)
+    s.phase_reference_confirmed = True
     r = sp.process(data, ("A", "B"), s)
     k = r.frequency_index(64)
     phases = np.arange(6).reshape(2, 3)*.2
@@ -206,10 +207,10 @@ def test_animation_preserves_polarization_and_spatial_phase():
         frame = r.frame("Cross-power", k, phase=phase, vector=True)
         np.testing.assert_allclose(frame.channels["A"][..., 0], 2*np.cos(phases+phase), atol=1e-12)
         np.testing.assert_allclose(frame.channels["B"][..., 0], 3*np.cos(phases+phase+np.pi/2), atol=1e-12)
-        for amplitude in "AB":
+        for amplitude, peak, offset in [("A", 2, 0), ("B", 3, np.pi/2)]:
             scalar = r.frame("Cross-power", k, phase=phase, amplitude=amplitude)
             np.testing.assert_allclose(scalar.channels["Cross-power"][..., 0],
-                                       np.sqrt(r.values(f"Auto-power {amplitude}")[..., k])*np.cos(phase-np.pi/2), atol=1e-12)
+                                       peak*np.cos(phases+phase+offset), atol=1e-12)
     np.testing.assert_array_equal(r.frequency_indices(60, 72, 2), [15, 17])
     with pytest.raises(ValueError, match="no calculated bins"):
         r.frequency_indices(61, 62)
@@ -254,6 +255,7 @@ def app():
 def test_gui_geometry_cached_views_intervals_and_animation(app, tmp_path, monkeypatch, dims, shape):
     from lapd_explorer.spectral_gui import SpectralDialog
     data, s = acquisition(dims, shape)
+    s.phase_reference_confirmed = True
     dialog = SpectralDialog(data, ("A", "B"), len(dims) == 3, s, {}, "Light")
     dialog.show()
     app.processEvents()
@@ -516,7 +518,8 @@ def test_main_selection_worker_persistence_and_preprocessing(app, monkeypatch):
     assert w.spectral_dialog is dialog and dialog.batch is batch
     assert dialog.fft_workers.value() == worker_count
     dialog.reject()
-    processed = preprocess(data, average=True, gain=2)
+    dialog.phase_reference.setChecked(True)
+    processed = preprocess(data, gain=2)
     w.processed(processed)
     w.components[1].setCurrentText("None")
     w.open_spectral()
@@ -524,7 +527,14 @@ def test_main_selection_worker_persistence_and_preprocessing(app, monkeypatch):
     assert new is not dialog and new.data is processed
     assert new.names == ("A",)
     assert new.fft_workers.value() == worker_count
+    assert not new.phase_reference.isChecked()
     assert not new.quantity.model().item(2).isEnabled()
-    assert not new.average_shots.isEnabled()
+    assert new.average_shots.isEnabled()
     new.reject()
+    errors = []
+    monkeypatch.setattr(w, "error", errors.append)
+    w.processed(preprocess(data, average=True))
+    w.open_spectral()
+    assert errors and "unmixed" in errors[-1]
+    assert w.spectral_dialog is new
     w.close()

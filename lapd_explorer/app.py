@@ -427,7 +427,7 @@ class MainWindow(W.QMainWindow):
         self.langmuir_dialog.exec()
 
     def open_spectral(self):
-        from .spectral import Settings, sampling_rate
+        from .spectral import Settings, sampling_rate, default_segment_samples, validate_unmixed
         from .spectral_gui import SpectralDialog
         self.stop_play()
         try:
@@ -437,9 +437,10 @@ class MainWindow(W.QMainWindow):
             if len(names) not in (1, 2) or len(set(names)) != len(names):
                 raise ValueError("Spectral Analysis needs one or two distinct channels. Set unused components to None.")
             sampling_rate(self.data.coords["time"])
+            validate_unmixed(self.data)
             vector = self.mode.currentText() in ("Magnitude", "Vector") and len(names) == 2
             if self.spectral_settings is None:
-                n = min(256, len(self.data.coords["time"]))
+                n = default_segment_samples(len(self.data.coords["time"]))
                 self.spectral_settings = Settings(nperseg=n, nfft=n, overlap=n//2,
                                                    max_lag=min(128, len(self.data.coords["time"])-1))
             selection = dict(case=self.case.value(), shot=self.shot.value())
@@ -448,6 +449,9 @@ class MainWindow(W.QMainWindow):
             if dialog is None or dialog.data is not self.data or dialog.names != names or dialog.vector != vector:
                 if dialog is not None:
                     dialog.deleteLater()
+                # A physical phase-reference assertion belongs to this input
+                # pair and dataset, not to unrelated future acquisitions.
+                self.spectral_settings.phase_reference_confirmed = False
                 self.spectral_dialog = dialog = SpectralDialog(
                     self.data, names, vector, self.spectral_settings, selection, self.appearance.currentText(), self)
             else:

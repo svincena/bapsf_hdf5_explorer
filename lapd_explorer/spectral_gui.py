@@ -62,7 +62,9 @@ class SpectralDialog(W.QDialog):
         note = W.QLabel(description + (" · Vector components" if vector else " · Scalar inputs") +
                         "\nUses the browser's currently processed data. " + (" → ".join(data.history) or "Original data") +
                         "\nS_AB = conj(A) × B; positive cross-phase means B leads A. "
-                        "Welch PSD uses one-sided density; covariance has a separate lag axis.")
+                        "Welch PSD uses one-sided density; covariance has a separate lag axis. "
+                        "Pair analysis assumes synchronized channels; units describe the acquired signals. "
+                        "Instrument delays and calibration must be accounted for before physical interpretation.")
         note.setWordWrap(True)
         layout.addWidget(note)
         split = W.QSplitter()
@@ -96,11 +98,18 @@ class SpectralDialog(W.QDialog):
         self.window = combo(["hann", "hamming", "blackman", "boxcar"])
         self.detrend = combo(["constant", "linear", "none"])
         self.average = combo(["mean", "median"])
-        self.average.setToolTip("Welch segment averaging, distinct from averaging shots. Median estimates can yield coherence > 1; values are not clipped.")
-        self.average_shots = W.QCheckBox("Average stored shots before spectra")
+        self.average.setToolTip("Welch segment averaging, distinct from averaging shots. Coherency and reliable phase are unavailable for median estimates.")
+        self.average_shots = W.QCheckBox("Average spectra over matched shots")
         self.average_shots.setChecked(settings.average_shots and "shot" in data.dims)
         self.average_shots.setEnabled("shot" in data.dims)
-        self.average_shots.setToolTip("Off: process stored shots independently. On: average waveforms at each position/case first. If the main browser already averaged shots, that average is the input.")
+        self.average_shots.setToolTip("Average each shot's auto/cross spectra at the same position/case, then derive coherence and phase. "
+                                      "Invalid pairs are omitted together. The input preview and spectrogram still show the selected shot.")
+        self.phase_reference = W.QCheckBox("Calibrated components; shared phase reference")
+        self.phase_reference.setChecked(settings.phase_reference_confirmed)
+        self.phase_reference.setEnabled(len(names) == 2)
+        self.phase_reference.setToolTip("Required for coherent A/B component and vector animations: matching observable/units, "
+                                       "component directions and synchronized sampling, with phase locked across all compared shots/positions. "
+                                       "Matching sample indices alone is insufficient. Off-bin or fluctuating modes can cancel in coherent amplitudes.")
         for key, label in [("nperseg", "Segment samples"), ("nfft", "FFT samples"),
                            ("fft_workers", "FFT workers"),
                            ("overlap", "Overlap samples"), ("window", "Window"),
@@ -111,6 +120,10 @@ class SpectralDialog(W.QDialog):
                 widget.setCurrentText(getattr(settings, key))
             form.addRow(label, widget)
         form.addRow(self.average_shots)
+        form.addRow(self.phase_reference)
+        self.resolution = W.QLabel()
+        self.resolution.setWordWrap(True)
+        form.addRow(self.resolution)
 
         self.tabs = W.QTabWidget()
         split.addWidget(self.tabs)
@@ -184,9 +197,11 @@ class SpectralDialog(W.QDialog):
         self.interpretation = combo(["Quantity representation", "Phase projection", "Vector components"])
         self.interpretation.model().item(1).setEnabled(len(names) == 2)
         self.interpretation.model().item(2).setEnabled(vector and len(data.spatial_dims) == 2)
-        self.interpretation.setToolTip("Vector components use coherent peak phasors referenced to interval start, not Welch power. Phase projection uses the cross-phase convention above.")
+        self.interpretation.setToolTip("A/B and vector components use coherent peak phasors with a confirmed common physical reference. "
+                                       "Quantity projection is an artificial visualization of complex cross-power/coherency.")
         self.amplitude = combo(["Quantity", "A", "B"])
-        self.amplitude.setToolTip("A/B: sqrt(PSD) in input units/√Hz, with phase from S_AB. Quantity: complex cross-power or coherency itself.")
+        self.amplitude.setToolTip("A/B: coherent peak component amplitudes in input units, preserving each component's phase. "
+                                 "Quantity: artificial projection of complex cross-power or coherency.")
         self.phase_steps = spin(2, 10000, 36)
         self.phase = number(0., -36000., 36000., 2)
         self.fps = spin(1, 60, 10)
@@ -266,6 +281,7 @@ class SpectralDialog(W.QDialog):
         for widget in (self.window, self.detrend, self.average):
             widget.currentTextChanged.connect(self.settings_changed)
         self.average_shots.toggled.connect(self.settings_changed)
+        self.phase_reference.toggled.connect(self.settings_changed)
         self.quantity.currentTextChanged.connect(self.quantity_changed)
         for widget in (self.representation, self.cmap, self.interpretation, self.amplitude, self.animation_mode):
             widget.currentTextChanged.connect(self.display_changed)
@@ -277,6 +293,7 @@ class SpectralDialog(W.QDialog):
         self.bin_slider.valueChanged.connect(self.coordinate_bin_changed)
         self.coordinate.editingFinished.connect(self.coordinate_changed)
         self.settings.interval = self.editor.interval()
+        self.update_resolution()
         self.selection_changed()
         self.quantity_changed()
 
@@ -303,6 +320,7 @@ class SpectralDialog(W.QDialog):
                               nperseg=self.nperseg.value(), nfft=self.nfft.value(), overlap=self.overlap.value(),
                               window=self.window.currentText(), detrend=self.detrend.currentText(),
                               average=self.average.currentText(), average_shots=self.average_shots.isChecked(),
+                              phase_reference_confirmed=self.phase_reference.isChecked(),
                               max_lag=self.max_lag.value(), fft_workers=self.fft_workers.value())
         self.settings.__dict__.update(vars(s))
         return copy.deepcopy(s)
@@ -312,6 +330,7 @@ class SpectralDialog(W.QDialog):
         for view in self._plot_zoom.values():
             view.clear()
         self.collect()
+        self.update_resolution()
         self.batch = self.point = None
         self._animation_frames = None
         self._phase = None
@@ -320,7 +339,21 @@ class SpectralDialog(W.QDialog):
             fig.clear()
             canvas.draw_idle()
         self.selection_changed()
+        self.display_changed()
         self.message.setText("Analysis settings changed. Process a point or all locations to refresh the spectra.")
+
+    def update_resolution(self):
+        s = self.settings
+        try:
+            _, crop = analysis.validate(self.data, self.names, s)
+            count, effective, factor = analysis.segment_support(crop.stop-crop.start, s)
+            self.resolution.setText(
+                f"Window: {s.nperseg/self.fs:g} s · FFT spacing: {self.fs/s.nfft:g} Hz\n"
+                f"Window noise bandwidth: {self.fs*factor:g} Hz · {count} segments/shot "
+                f"(~{effective:.2f} independent averages).\n"
+                "Choose duration for the oscillations and stationary interval of interest. Zero padding only refines bins.")
+        except ValueError as exc:
+            self.resolution.setText(str(exc))
 
     def window_changed(self, interval):
         self.trace_view.set_interval(interval)
@@ -335,21 +368,16 @@ class SpectralDialog(W.QDialog):
         self._animation_frames = None
         self._phase = None
         index = self.index()
-        key = tuple(slice(None) if d == "shot" and self.average_shots.isChecked() else i
-                    for d, i in zip(self.data.dims[:-1], index))
-        traces = [self.data.channels[n][key] for n in self.names]
-        if self.average_shots.isChecked() and "shot" in self.data.dims:
-            traces = [a.mean(axis=0) for a in traces]
+        traces = [self.data.channels[n][index] for n in self.names]
         self.trace_view.traces(traces[0], traces[-1])
         self.trace_view.set_interval(self.editor.interval())
         if "shot" in self.indices:
             self.indices["shot"].setEnabled(True)
-        description = ", ".join(f"{d}={self.data.coords[d][w.value()]:g}" for d, w in self.indices.items()
-                                if d != "shot" or not self.average_shots.isChecked())
-        if self.average_shots.isChecked():
-            description += " · averaged shots"
-        elif self.data.shot_numbers is not None:
+        description = ", ".join(f"{d}={self.data.coords[d][w.value()]:g}" for d, w in self.indices.items())
+        if self.data.shot_numbers is not None:
             description += f" · Global shot {self.data.shot_numbers[index]}"
+        if self.average_shots.isChecked():
+            description += " · spectra: matched-shot ensemble; preview/spectrogram: selected shot"
         self.location.setText(description or "Single point / trace")
         self._render_key = None
         self.draw_spectrum()
@@ -584,8 +612,20 @@ class SpectralDialog(W.QDialog):
 
     def results_ready(self, result):
         total = int(np.prod(result.source.shape[:-1]))
-        self.message.setText(f"{total-len(result.failures):,}/{total:,} accepted; {len(result.failures):,} failed (NaN). "
-                             "Display changes use cached arrays." +
+        accepted = int(np.count_nonzero(result.valid_shots))
+        effective = result.effective_averages()
+        support = f"Approx. independent averages: {np.min(effective):.2f}–{np.max(effective):.2f}. "
+        if result.settings.average_shots:
+            support = (f"Valid matched shots/location: {np.min(result.valid_shots)}–{np.max(result.valid_shots)}. "
+                       + support)
+        if result.settings.average == "median":
+            support += "Coherence and reliable phase unavailable for median estimates. "
+        elif np.any(effective <= 1+1e-10):
+            support += "Single-estimate coherence/phase masked. "
+        else:
+            support += "Phase masked below an approximate 95% pointwise coherence threshold (stationary independent trials assumed). "
+        self.message.setText(f"{accepted:,}/{total:,} result locations; {len(result.failures):,} rejected input records. "
+                             + support +
                              (" Failures: " + "; ".join(f"{i}: {reason}" for i, reason in result.failures[:4]) if result.failures else ""))
         for widget in (self.frequency_start, self.frequency_stop):
             widget.blockSignals(True)
@@ -617,10 +657,22 @@ class SpectralDialog(W.QDialog):
         self._animation_frames = None
         self._phase = None
         self._render_key = None
+        coherent = self.phase_reference.isChecked()
+        for i in (1, 2):
+            self.amplitude.model().item(i).setEnabled(coherent and len(self.names) == 2)
+        self.interpretation.model().item(2).setEnabled(coherent and self.vector and len(self.data.spatial_dims) == 2)
+        if not coherent:
+            if self.interpretation.currentText() == "Vector components":
+                self.interpretation.setCurrentText("Quantity representation")
+            if self.amplitude.currentText() != "Quantity":
+                self.amplitude.setCurrentText("Quantity")
         self.amplitude.model().item(0).setEnabled(self.quantity.currentText() in analysis.COMPLEX)
         if (self.interpretation.currentText() == "Phase projection" and
                 self.quantity.currentText() not in analysis.COMPLEX and self.amplitude.currentText() == "Quantity"):
-            self.amplitude.setCurrentText("A")
+            if coherent:
+                self.amplitude.setCurrentText("A")
+            else:
+                self.interpretation.setCurrentText("Quantity representation")
         self.amplitude.setEnabled(self.interpretation.currentText() == "Phase projection")
         self.phase_steps.setEnabled(self.animation_mode.currentIndex() == 1)
         self.draw_spectrum()
@@ -668,6 +720,12 @@ class SpectralDialog(W.QDialog):
         plotting.style(ax, colors(self.appearance))
         ax.plot(coord, values)
         self.spectrum_cursor = ax.axvline(coord[min(self.bin_slider.value(), len(coord)-1)], ls="--", lw=.9)
+        if q == "Magnitude-squared coherence" and result.settings.average == "mean":
+            key = self.result_index(result)
+            if result.effective_averages()[key] > 1+1e-10:
+                ax.axhline(float(result.coherence_threshold()[key]), ls=":", color=colors(self.appearance)["secondary"],
+                           label="Approx. 95% pointwise null threshold")
+                ax.legend(fontsize=8, labelcolor=colors(self.appearance)["fg"], facecolor=colors(self.appearance)["bg"])
         covariance = "covariance" in q.lower()
         ax.set(xlabel=("Lag (s); positive = B follows A" if q == "Cross-covariance" else "Lag (s)") if covariance else "Frequency (Hz)",
                ylabel=result.units(q, kind, degrees), title=f"{q} · {', '.join(self.names)}\n{self.location.text()}")
@@ -692,7 +750,10 @@ class SpectralDialog(W.QDialog):
         if vector:
             label = "Coherent peak vector · " + label
         elif projection:
-            label = f"{q if self.amplitude.currentText() == 'Quantity' else 'sqrt(PSD '+self.amplitude.currentText()+')'} × cos(phase − cross-phase) · " + label
+            if self.amplitude.currentText() == "Quantity":
+                label = f"Artificial {q} projection · " + label
+            else:
+                label = f"Coherent peak component {self.amplitude.currentText()} · " + label
         else:
             label = q + (f" ({self.representation.currentText()})" if q in analysis.COMPLEX else "") + " · " + label
         return data, f"{label}{detail}\n{', '.join(self.names)} · {self.location.text()}", vector

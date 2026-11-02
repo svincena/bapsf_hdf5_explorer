@@ -10,7 +10,7 @@ import os
 import json
 import numpy as np
 from scipy import fft, signal
-from .spectral import sampling_rate, representation
+from .spectral import sampling_rate, representation, validate_unmixed
 from .langmuir import interval_slice
 
 
@@ -84,6 +84,7 @@ def layout(samples, settings):
 
 
 def validate(data, names, settings, index=()):
+    validate_unmixed(data)
     names = tuple(names)
     if len(names) not in (1, 2) or len(set(names)) != len(names) or any(n not in data.channels for n in names):
         raise ValueError("Select one or two distinct stored channels for a spectrogram.")
@@ -122,6 +123,7 @@ class Result:
     frequency: np.ndarray
     time: np.ndarray
     arrays: dict
+    source_metadata: dict = field(default_factory=dict)
 
     def displayed(self, quantity, kind="Magnitude", degrees=False):
         if quantity not in self.arrays:
@@ -214,7 +216,8 @@ def process(data, names, settings, index=(), progress=None, canceled=None, *, ma
     time = data.coords["time"][crop.start] + (starts+s.nperseg//2)/fs
     shot = int(data.shot_numbers[index]) if data.shot_numbers is not None else None
     return Result(names, index, {d: float(data.coords[d][i]) for d, i in zip(data.dims[:-1], index)}, shot,
-                  data.units, data.spatial_units, data.source, data.history, s, frequency, time, arrays)
+                  data.units, data.spatial_units, data.source, data.history, s, frequency, time, arrays,
+                  copy.deepcopy(data.metadata))
 
 
 def color_values(result, quantity, kind="Magnitude", degrees=False, scale="Linear", reference=1., dynamic_range=80.):
@@ -227,8 +230,8 @@ def color_values(result, quantity, kind="Magnitude", degrees=False, scale="Linea
             raise ValueError("dB reference and dynamic range must be finite and positive.")
         # These are powers (including |cross-power|), not amplitude spectra.
         values = 10*(np.log10(np.maximum(values, np.finfo(float).tiny))-np.log10(reference))
-        peak = float(np.max(values))
-        values = np.maximum(values, peak-dynamic_range)
+        # Keep every value: the GUI derives color limits from the visible band.
+        # Clipping here would erase weak in-band peaks behind out-of-band power.
         return values, f"dB re {reference:g} {result.value_units(quantity, kind, degrees)}"
     if scale not in ("Linear", "Logarithmic", "Symmetric log"):
         raise ValueError("Unknown spectrogram color scale.")
@@ -242,6 +245,7 @@ def save(path, result):
     metadata = dict(names=result.names, index=result.index, location=result.location,
                     global_shot=result.global_shot, units=result.units, spatial_units=result.spatial_units,
                     source=result.source, history=result.history, settings=asdict(result.settings),
+                    source_metadata=result.source_metadata,
                     cross_convention="conj(A)*B; positive phase means B leads A",
                     time_coordinate="window center sample; floor(nperseg/2)")
     with open(path, "wb") as target:

@@ -159,7 +159,7 @@ def test_display_units_db_reference_and_lossless_export(tmp_path):
     k = np.argmin(abs(result.frequency-64))
     np.testing.assert_allclose(values[k], 10*np.log10(result.arrays["Auto-power A"][k]/2))
     assert "dB re 2 (V)²/Hz" == units
-    assert values.max()-values.min() == pytest.approx(60)
+    assert values.max()-values.min() > 60  # Color limits must not destroy numerical dB contrast.
     assert result.value_units("Cross-power", "Phase", True) == "deg"
     with pytest.raises(ValueError, match="nonnegative"):
         sg.color_values(result, "Cross-power", "Real", scale="dB")
@@ -257,6 +257,7 @@ def test_gui_worker_cached_displays_live_cycling_and_controls(app, tmp_path, mon
     dialog.reset_view()
     np.testing.assert_allclose(controls.last_axis.get_xlim(), original_limits)
     assert dialog.spectrogram_result is first
+    controls.quantity.setCurrentText("Cross-power")
     for kind in ("Phase", "Real", "Imaginary", "Magnitude"):
         controls.representation.setCurrentText(kind)
         assert dialog.spectrogram_result is first
@@ -307,6 +308,9 @@ def test_single_channel_and_single_window_gui_geometries(app, dims, shape):
     dialog.show()
     app.processEvents()
     controls = dialog.spectrogram_controls
+    controls.nperseg.setValue(128)
+    controls.nfft.setValue(128)
+    controls.overlap.setValue(64)
     settings = controls.settings(dialog.editor.interval())
     result = sg.process(data, ("A",), settings, dialog.index())
     dialog.spectrogram_ready(result)
@@ -328,6 +332,7 @@ def test_zero_power_phase_is_masked_and_map_stays_open_when_cycling(app):
     app.processEvents()
     result = sg.process(data, ("A", "B"), dialog.spectrogram_controls.settings(dialog.editor.interval()), dialog.index())
     dialog.spectrogram_ready(result)
+    dialog.spectrogram_controls.quantity.setCurrentText("Cross-power")
     dialog.spectrogram_controls.representation.setCurrentText("Phase")
     assert np.ma.getmaskarray(dialog.spectrogram_controls.last_image.get_array()).all()
     dialog.spectrogram_controls.representation.setCurrentText("Magnitude")

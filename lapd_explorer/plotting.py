@@ -89,6 +89,12 @@ def render(fig, data, opts, values=None):
     scale, unit = TIME_UNITS[opts["time_unit"]], opts["time_unit"]
     t = data.coords["time"] * scale
     trace = values[index] if spatial else values
+    # Vector fluctuation power is the sum of component PSDs. Taking the norm
+    # first is nonlinear and erases a circularly polarized oscillation.
+    psd_components = ([data.selected(n, opts["case"], opts["shot"])[index] for n in names]
+                      if mode in ("Magnitude", "Vector") else None)
+    psd_label = ("Sum of component PSDs" if psd_components is not None else
+                 f"PSD of |{names[0]}|" if mode == "Absolute" else f"PSD of {names[0]}")
     gs = fig.add_gridspec(2, 3, height_ratios=[1.45, 1])
     ax = fig.add_subplot(gs[0, :2])
     trace_ax = fig.add_subplot(gs[1, :2])
@@ -172,14 +178,14 @@ def render(fig, data, opts, values=None):
         side1.grid(False)
         side1.set(title="Position × time", xlabel=f"Time ({unit})", ylabel=f"{spatial[0]} ({data.spatial_units})")
         overview_cursor = map_cursor(side1.axvline(t[ti], lw=.9))
-        draw_psd(side2, trace, data, theme)
+        draw_psd(side2, trace, data, theme, components=psd_components, label=psd_label)
     else:
         for name in names:
             ax.plot(t, data.selected(name, opts["case"], opts["shot"]), label=name, lw=1.2)
         point_cursor = ax.axvline(t[ti], color=ACCENT, lw=1)
         ax.set(xlabel=f"Time ({unit})", ylabel=data.units)
         ax.legend(fontsize=8, facecolor=PANEL, labelcolor=FG, edgecolor=PANEL)
-        draw_psd(side1, trace, data, theme)
+        draw_psd(side1, trace, data, theme, components=psd_components, label=psd_label)
         side2.axis("off")
         finite = trace[np.isfinite(trace)]
         stats = (f"Mean    {finite.mean():.5g}\nRMS     {np.sqrt(np.mean(finite**2)):.5g}\n"
@@ -235,12 +241,14 @@ def render(fig, data, opts, values=None):
     return ax
 
 
-def draw_psd(ax, trace, data, theme=None):
+def draw_psd(ax, trace, data, theme=None, *, components=None, label="Welch power spectrum"):
     theme = colors() if theme is None else theme
     try:
-        f, p = spectrum(trace, data.coords["time"])
+        f, p = spectrum(trace if components is None else np.asarray(components), data.coords["time"])
+        if components is not None:
+            p = p.sum(axis=0)
         ax.semilogy(f[1:]/1e3, np.maximum(p[1:], np.finfo(float).tiny), color=theme["secondary"])
-        ax.set(title="Welch power spectrum", xlabel="Frequency (kHz)", ylabel=f"{data.units}²/Hz")
+        ax.set(title=label, xlabel="Frequency (kHz)", ylabel=f"{data.units}²/Hz")
     except ValueError as exc:
         ax.text(.1, .5, str(exc), wrap=True, transform=ax.transAxes, color=theme["muted"])
 

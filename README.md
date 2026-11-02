@@ -391,7 +391,10 @@ Filtering runs independently for every channel, time, case, and remaining shot,
 after shot averaging and before absolute values or vector magnitudes. It preserves
 grid coordinates and array shape. Maps, vector arrows, linked slices, cursor
 traces, saved images, movies, and exported data all use the processed channels.
-Settings and axis order are recorded in exported processing history. The controls
+Settings and axis order are recorded in exported processing history. Filtering
+clears the original global-shot map because filtered traces combine records.
+Quantitative spectral analysis rejects these waveform mixtures; estimate spectra
+before combining locations for a spectral map. The controls
 are disabled for point and line data; filtering is off by default. **Reset
 processing** restores the loaded data, and repeated Apply operations always start
 from those originals.
@@ -460,13 +463,26 @@ Still images and movies preserve the selected slice limits.
 Assign one or two channels with the existing component selectors, set unused
 components to **None**, and open **Spectral Analysis…**. The tool uses the
 currently processed dataset and preserves spatial geometry, cases, and stored
-shots. It provides Welch auto/cross-power, coherency, coherence, cross-phase,
+shots. Reset main-browser waveform shot/spatial averaging first: the spectral
+dialog averages **matched per-shot spectra**, preserving fluctuation power and
+avoiding cross-products between different shots. It provides Welch auto/cross-power, coherency, coherence, cross-phase,
 lag-domain covariance, scalar/vector animations, and single-trace auto/cross-power
 spectrograms. Use **Trace** to select spatial coordinates, axis/flat indices, or a
 global shot, or click the **Locations** plot. The persistent **Previous/Next**
 controls cycle through traces, locations, shots, or cases. **Make spectrogram**
 opens a time-frequency view with separate estimation and display options; saved
 NPZ files preserve complex cross-power and all trace/settings metadata.
+
+Single-estimate and median-derived coherence are masked. Welch phase is masked
+below an approximate 95% pointwise coherence threshold, with averaging support
+reported in the dialog. Coherent A/B or vector animations require confirmation
+of calibrated compatible components and a common physical phase reference.
+Window duration, bandwidth, and frequency spacing are shown explicitly; choose
+them for the oscillations and stationary interval being studied.
+
+The main browser's quick PSD in Magnitude/Vector mode sums the selected
+component PSDs, preserving circularly polarized fluctuations. Absolute mode
+instead shows the explicitly labeled PSD of the absolute-valued signal.
 
 Spectral animations include a **Playback** seek slider beneath the spatial
 field plot. It tracks Play/Step and lets you scrub frequency or phase frames

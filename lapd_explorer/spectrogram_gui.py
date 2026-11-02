@@ -4,6 +4,7 @@ import numpy as np
 from PySide6 import QtCore as C, QtWidgets as W
 from matplotlib.colors import Normalize, LogNorm, SymLogNorm
 from . import spectrogram as analysis, plotting
+from .spectral import default_segment_samples
 from .appearance import colors
 from .widgets import combo, colormap_combo, spin, form_layout, ScientificDoubleSpinBox
 
@@ -25,8 +26,8 @@ class Controls(W.QWidget):
     def __init__(self, fs, samples, names, settings=None, parent=None):
         super().__init__(parent)
         self.fs = fs
-        s = settings or analysis.Settings(nperseg=min(256, samples), nfft=min(256, samples),
-                                         overlap=3*min(256, samples)//4)
+        length = default_segment_samples(samples)
+        s = settings or analysis.Settings(nperseg=length, nfft=length, overlap=3*length//4)
         self._syncing = False
         outer = W.QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -35,7 +36,9 @@ class Controls(W.QWidget):
         form = form_layout(estimate)
         self.form = form
         self.option_tabs.addTab(estimate, "Estimation")
-        note = W.QLabel("One stored trace at the selected location, case and shot. Uses the shared analysis interval; Welch shot averaging is not applied.")
+        note = W.QLabel("The input preview and spectrogram use the selected acquired shot. Spectral ensemble averaging does not change this trace. "
+                       "Cross-power is a single-window product: its magnitude alone does not establish coupling; "
+                       "use averaged Welch coherence to assess a signal pair.")
         note.setWordWrap(True)
         outer.addWidget(note)
         outer.addWidget(self.option_tabs)
@@ -87,7 +90,7 @@ class Controls(W.QWidget):
         df = form_layout(display)
         self.option_tabs.addTab(display, "Display")
         self.quantity = combo(analysis.QUANTITIES[:1] if len(names) == 1 else analysis.QUANTITIES)
-        self.quantity.setCurrentText("Cross-power" if len(names) == 2 else "Auto-power A")
+        self.quantity.setCurrentText("Auto-power A")
         self.representation = combo(["Magnitude", "Phase", "Real", "Imaginary", "Magnitude squared"])
         self.degrees = W.QCheckBox("Phase in degrees")
         self.degrees.setChecked(True)
@@ -185,8 +188,15 @@ class Controls(W.QWidget):
 
     def update_resolution(self):
         hop = self.nperseg.value()-self.overlap.value()
+        try:
+            window = analysis.window_values(self.settings(None))
+            bandwidth = self.fs*np.sum(window**2)/window.sum()**2
+            detail = f"Window noise bandwidth: {bandwidth:g} Hz. "
+        except (ValueError, AttributeError):
+            detail = ""
         self.resolution.setText(f"Window: {self.nperseg.value()/self.fs:g} s · Hop: {hop/self.fs:g} s\n"
-                                f"FFT bin spacing: {self.fs/self.nfft.value():g} Hz. Zero padding refines bins, not spectral resolution.")
+                                f"FFT bin spacing: {self.fs/self.nfft.value():g} Hz. {detail}"
+                                "Choose a window spanning the oscillations of interest. Overlap and zero padding do not improve intrinsic resolution.")
 
     def update_display_controls(self, *args):
         cross = self.quantity.currentText() == "Cross-power"
@@ -280,6 +290,8 @@ class Controls(W.QWidget):
         if result.global_shot is not None:
             location += f" · Global shot {result.global_shot}"
         title = q + (f" ({kind.lower()})" if q == "Cross-power" else "")
+        if q == "Cross-power":
+            title += " · unaveraged cross-periodogram (no coherence estimate)"
         ax.set(xlabel="Window center time (ms)", ylabel="Frequency (Hz)",
                title=f"{title} · {', '.join(result.names)}\n{location or 'Single time series'}", ylim=(low, high))
         if self.log_frequency.isChecked():

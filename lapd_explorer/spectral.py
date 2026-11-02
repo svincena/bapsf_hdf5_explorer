@@ -7,6 +7,7 @@ and use a fixed N denominator: R_AB[k] = sum A[n]*B[n+k]/N.
 Coherent peak phasors are a separate estimator, described in docs/spectral.md.
 """
 from dataclasses import dataclass, field, replace
+from functools import cached_property
 import copy
 import os
 import numpy as np
@@ -32,8 +33,51 @@ class Settings:
     detrend: str = "constant"
     average: str = "mean"
     average_shots: bool = False
+    phase_reference_confirmed: bool = False
     max_lag: int = 128
     fft_workers: int = field(default_factory=lambda: max(1, (os.cpu_count() or 1) // 2))
+
+
+def default_segment_samples(samples):
+    """Start with roughly half the record and two or more half-overlap windows.
+
+    This is a resolution/averaging compromise, not a physical frequency choice.
+    The GUI exposes duration and bandwidth so users can choose that explicitly.
+    """
+    return max(4, 2**int(np.floor(np.log2(max(4, 2*samples//3)))))
+
+
+def validate_unmixed(data):
+    # History fallback also protects portable datasets written before structured
+    # provenance was introduced. Per-trace gain/integration/filtering is allowed.
+    mixed_history = any(step.startswith("Spatial averaging:") or
+                        (step.startswith("Average ") and "shot" in step.lower())
+                        for step in data.history)
+    if data.metadata.get("waveform_mixing") or mixed_history:
+        raise ValueError("Spectral estimates require unmixed acquired traces. Reset waveform shot/spatial "
+                         "averaging in the main browser; use Average spectra over matched shots here.")
+
+
+def segment_support(samples, settings):
+    """Segment count, approximate independent averages, and window bandwidth factor.
+
+    The overlap correction assumes stationary Gaussian samples and does not
+    establish independence between experimental shots or stationarity in time.
+    """
+    s = settings
+    hop = s.nperseg-s.overlap
+    count = 1 + (samples-s.nperseg)//hop
+    window = signal.get_window(s.window, s.nperseg)
+    energy = np.dot(window, window)
+    lags = np.arange(1, min(count, (s.nperseg-1)//hop+1))
+    offsets = lags*hop
+    if len(offsets) > 16:
+        # Near-total overlap must not turn a GUI support estimate into O(N²).
+        rho = signal.correlate(window, window, method="fft")[s.nperseg-1+offsets]/energy
+    else:
+        rho = np.array([np.dot(window[:-offset], window[offset:])/energy for offset in offsets])
+    correction = 1 + 2*np.sum((1-lags/count)*rho**2)
+    return count, count/correction, energy/window.sum()**2
 
 
 def sampling_rate(time):
@@ -47,6 +91,7 @@ def sampling_rate(time):
 
 
 def validate(data, names, settings):
+    validate_unmixed(data)
     if len(names) not in (1, 2) or len(set(names)) != len(names):
         raise ValueError("Select one or two distinct channels; set the third component to None.")
     if any(n not in data.channels for n in names):
@@ -78,14 +123,14 @@ def validate(data, names, settings):
 
 
 def selected_data(data, names, average_shots=False):
-    """Keep the browser's existing axes; optionally average repeats before estimation."""
+    """Geometry adapter only; never combine waveforms before spectral estimation."""
     channels = {n: data.channels[n] for n in names}
     if average_shots and "shot" in data.dims:
-        axis = data.dims.index("shot")
-        return replace(data, channels={n: a.mean(axis=axis) for n, a in channels.items()},
+        key = tuple(0 if d == "shot" else slice(None) for d in data.dims)
+        return replace(data, channels={n: a[key] for n, a in channels.items()},
                        dims=tuple(d for d in data.dims if d != "shot"),
                        coords={d: c for d, c in data.coords.items() if d != "shot"},
-                       shot_numbers=None, history=data.history + ("Average shots before spectral estimation",))
+                       shot_numbers=None, history=data.history + ("Ensemble of matched per-shot spectra",))
     return replace(data, channels=channels)
 
 
@@ -112,6 +157,21 @@ class Result:
     lags: np.ndarray
     arrays: dict
     failures: list
+    valid_shots: np.ndarray | None = None
+
+    @cached_property
+    def support(self):
+        _, crop = validate(self.source, self.names, self.settings)
+        return segment_support(crop.stop-crop.start, self.settings)
+
+    def effective_averages(self):
+        counts = np.ones(self.source.shape[:-1]) if self.valid_shots is None else self.valid_shots
+        return counts * self.support[1]
+
+    def coherence_threshold(self):
+        """Approximate 95% pointwise null threshold, not a multiple-test correction."""
+        effective = self.effective_averages()
+        return 1 - np.exp(np.log(.05)/np.maximum(effective-1, np.finfo(float).eps))
 
     @property
     def dims(self):
@@ -130,13 +190,20 @@ class Result:
         if quantity not in self.quantities:
             raise ValueError("This quantity requires two selected channels.")
         if quantity == "Complex coherency" or quantity == "Magnitude-squared coherence":
-            denominator = np.sqrt(self.arrays["Auto-power A"][key] * self.arrays["Auto-power B"][key])
+            denominator = np.sqrt(self.arrays["Auto-power A"][key]) * np.sqrt(self.arrays["Auto-power B"][key])
             coherence = np.full(denominator.shape, np.nan + 1j*np.nan)
-            np.divide(self.arrays["Cross-power"][key], denominator, out=coherence, where=denominator > 0)
+            supported = np.broadcast_to((self.effective_averages() > 1+1e-10)[..., None],
+                                       self.arrays["Auto-power A"].shape)[key]
+            if self.settings.average == "mean":
+                np.divide(self.arrays["Cross-power"][key], denominator, out=coherence,
+                          where=(denominator > 0) & supported)
             return abs(coherence)**2 if quantity == "Magnitude-squared coherence" else coherence
         if quantity == "Cross-phase":
             cross = self.arrays["Cross-power"][key]
-            return np.where(abs(cross) > 0, np.angle(cross), np.nan)
+            threshold = np.broadcast_to(self.coherence_threshold()[..., None],
+                                        self.arrays["Auto-power A"].shape)[key]
+            reliable = self.values("Magnitude-squared coherence", key) > threshold
+            return np.where((abs(cross) > 0) & reliable, np.angle(cross), np.nan)
         return self.arrays[quantity][key]
 
     def coordinate(self, quantity):
@@ -153,6 +220,9 @@ class Result:
     def displayed(self, quantity, kind="Magnitude", degrees=False, key=Ellipsis):
         values = self.values(quantity, key)
         if quantity in COMPLEX:
+            if kind == "Phase":
+                phase = self.values("Cross-phase", key)
+                return np.rad2deg(phase) if degrees else phase
             return representation(values, kind, degrees)
         return np.rad2deg(values) if quantity == "Cross-phase" and degrees else values
 
@@ -176,12 +246,15 @@ class Result:
               phase=None, amplitude="Quantity", vector=False):
         """One cached spatial frame. Frequency and artificial phase are independent.
 
-        Cross-referenced scalar fields use |A| cos(phase - arg(S_AB)).
+        Component projections use the same coherent phasors as vector frames.
         Coherent vector phasors use Re(F * exp(i*phase)), preserving relative
         and spatial phase with the same forward-time convention for both axes.
         """
         if not np.isfinite(phase if phase is not None else 0.):
             raise ValueError("Animation phase must be finite.")
+        if (vector or (phase is not None and amplitude in ("A", "B"))) and not self.settings.phase_reference_confirmed:
+            raise ValueError("Coherent component displays require calibrated compatible components and a "
+                             "confirmed common phase reference across the compared records.")
         if vector:
             if len(self.names) != 2:
                 raise ValueError("Vector animation requires two components.")
@@ -191,11 +264,10 @@ class Result:
         elif phase is not None:
             if amplitude in ("A", "B"):
                 if len(self.names) != 2:
-                    raise ValueError("Cross-phase referenced amplitudes require two channels.")
-                power = self.arrays[f"Auto-power {amplitude}"][..., bin_index]
-                phi = self.values("Cross-phase", (..., bin_index))
-                values = np.sqrt(power) * np.cos(phase-phi)
-                units = f"{self.source.units}/√Hz"
+                    raise ValueError("Coherent component amplitudes require two channels.")
+                phasor = self.arrays[f"Phasor {amplitude}"][..., bin_index]
+                values = np.real(phasor * np.exp(1j*phase))
+                units = self.source.units
             elif quantity in COMPLEX:
                 z = self.values(quantity, (..., bin_index))
                 values = np.real(np.conj(z) * np.exp(1j*phase))
@@ -248,7 +320,8 @@ def _estimates(traces, fs, s):
 def process(data, names, settings, progress=None, canceled=None, index=None):
     """Bounded vectorized batches; bad locations become NaN without losing others.
 
-    index is in the original browser axes, before optional repeat averaging.
+    index is in the original browser axes. Ensemble averaging combines only
+    matched per-shot estimates, with identical valid-shot support for all terms.
     """
     fs, window = validate(data, names, settings)
     if canceled is not None and canceled():
@@ -256,27 +329,34 @@ def process(data, names, settings, progress=None, canceled=None, index=None):
     if index is not None:
         if len(index) != len(data.dims)-1:
             raise ValueError("Point index must identify every non-time axis.")
+        if any(not isinstance(i, (int, np.integer)) or not 0 <= i < n
+               for i, n in zip(index, data.shape[:-1])):
+            raise ValueError("Point index is outside the stored range.")
         key = tuple(slice(None) if d == "shot" and settings.average_shots else i
                     for d, i in zip(data.dims[:-1], index))
         channels = {n: data.channels[n][key] for n in names}
-        if settings.average_shots and "shot" in data.dims:
-            channels = {n: a.mean(axis=0) for n, a in channels.items()}
-        source = Dataset(channels, ("time",), {"time": data.coords["time"]}, units=data.units,
-                         source=data.source, history=data.history)
+        dims = (("shot",) if settings.average_shots and "shot" in data.dims else ()) + ("time",)
+        records = Dataset(channels, dims, {d: data.coords[d] for d in dims}, units=data.units,
+                          spatial_units=data.spatial_units, source=data.source, history=data.history,
+                          metadata=dict(data.metadata))
     else:
-        source = selected_data(data, names, settings.average_shots)
+        records = selected_data(data, names)
+    source = selected_data(records, names, settings.average_shots)
+    shot_axis = records.dims.index("shot") if settings.average_shots and "shot" in records.dims else None
     frequency = np.fft.rfftfreq(settings.nfft, 1/fs)
     lags = np.arange(-settings.max_lag, settings.max_lag+1)/fs
     shape = source.shape[:-1]
     arrays = {}
     for label in "AB"[:len(names)]:
-        arrays[f"Auto-power {label}"] = np.full(shape+(len(frequency),), np.nan)
-        arrays[f"Phasor {label}"] = np.full(shape+(len(frequency),), np.nan+1j*np.nan)
-    arrays["Covariance A"] = np.full(shape+(len(lags),), np.nan)
+        arrays[f"Auto-power {label}"] = np.zeros(shape+(len(frequency),))
+        arrays[f"Phasor {label}"] = np.zeros(shape+(len(frequency),), dtype=complex)
+    arrays["Covariance A"] = np.zeros(shape+(len(lags),))
     if len(names) == 2:
-        arrays["Cross-power"] = np.full(shape+(len(frequency),), np.nan+1j*np.nan)
-        arrays["Cross-covariance"] = np.full(shape+(len(lags),), np.nan)
-    total = int(np.prod(shape))
+        arrays["Cross-power"] = np.zeros(shape+(len(frequency),), dtype=complex)
+        arrays["Cross-covariance"] = np.zeros(shape+(len(lags),))
+    counts = np.zeros(shape, dtype=int)
+    record_shape = records.shape[:-1]
+    total = int(np.prod(record_shape))
     segments = 1 + (window.stop-window.start-settings.nperseg)//(settings.nperseg-settings.overlap)
     chunk = max(1, min(64, 1_000_000//max(len(frequency)*segments, window.stop-window.start)))
     failures = []
@@ -286,8 +366,8 @@ def process(data, names, settings, progress=None, canceled=None, index=None):
         for start in range(0, total, chunk):
             if canceled is not None and canceled():
                 raise ValueError("Spectral processing canceled; previous results retained.")
-            indices = [np.unravel_index(i, shape) for i in range(start, min(total, start+chunk))]
-            traces = [np.stack([source.channels[n][i][window] for i in indices]) for n in names]
+            indices = [np.unravel_index(i, record_shape) for i in range(start, min(total, start+chunk))]
+            traces = [np.stack([records.channels[n][i][window] for i in indices]) for n in names]
             valid = np.logical_and.reduce([np.all(np.isfinite(a), axis=-1) for a in traces])
             failures.extend((indices[i], "Nonfinite samples in selected interval") for i in np.flatnonzero(~valid))
             if valid.any():
@@ -299,8 +379,10 @@ def process(data, names, settings, progress=None, canceled=None, index=None):
                         if not all(np.all(np.isfinite(a[row])) for a in estimates.values()):
                             failures.append((i, "Nonfinite spectral estimates (check signal scale)"))
                         else:
+                            output_index = i if shot_axis is None else i[:shot_axis]+i[shot_axis+1:]
                             for key, values in estimates.items():
-                                arrays[key][i] = values[row]
+                                arrays[key][output_index] += values[row]
+                            counts[output_index] += 1
 
                 try:
                     save(_estimates(finite_traces, fs, settings), good)
@@ -313,4 +395,7 @@ def process(data, names, settings, progress=None, canceled=None, index=None):
                             failures.append((i, str(exc)))
             if progress is not None:
                 progress(min(total, start+chunk), total)
-    return Result(source, tuple(names), copy.deepcopy(settings), frequency, lags, arrays, failures)
+    for values in arrays.values():
+        np.divide(values, counts[..., None], out=values, where=counts[..., None] > 0)
+        values[counts == 0] = np.nan
+    return Result(source, tuple(names), copy.deepcopy(settings), frequency, lags, arrays, failures, counts)
