@@ -296,6 +296,59 @@ class SpectralDialog(W.QDialog):
         self.update_resolution()
         self.selection_changed()
         self.quantity_changed()
+        self.set_input_tooltips()
+
+    def set_input_tooltips(self):
+        tips = {
+            "nperseg": "Samples in each Welch segment. Longer segments resolve closer frequencies but leave fewer segments to average. Must fit inside the analysis interval.",
+            "nfft": "FFT length, at least the segment length. Larger values add zero padding and finer frequency bins, without improving intrinsic frequency resolution.",
+            "overlap": "Samples shared by adjacent Welch segments. Must be smaller than Segment samples; the hop is segment length minus overlap.",
+            "max_lag": "Largest positive and negative covariance lag in samples. Divide by the sampling rate to obtain seconds. Must be shorter than the analysis interval.",
+            "window": "Taper applied to each segment before the FFT. Hann is a common starting point; boxcar has no taper and stronger spectral leakage.",
+            "detrend": "Remove each segment's mean (constant), fitted straight line (linear), or nothing (none) before estimating spectra. Covariance separately removes the full interval mean.",
+            "quantity": "Choose the cached spectral or covariance result to display. Pair quantities require both A and B. Changing this selection does not recompute estimates.",
+            "representation": "Display a complex result as magnitude, phase, real part, imaginary part, or magnitude squared. Availability depends on the selected quantity.",
+            "degrees": "Show phase angles in degrees when checked, or radians when unchecked.",
+            "bin_slider": "Select a computed frequency bin, or a lag bin for covariance. The coordinate field shows the selected value.",
+            "coordinate": "Enter a frequency in Hz, or covariance lag in seconds. The display snaps to the nearest computed bin when you finish editing.",
+            "frequency_start": "Lower frequency limit in Hz for the spectrum display and frequency animation sweep.",
+            "frequency_stop": "Upper frequency limit in Hz for the spectrum display and frequency animation sweep.",
+            "frequency_step": "Advance by this many computed frequency bins per sweep frame. Larger values skip bins and shorten the animation.",
+            "lock": "Keep the same color and vector amplitude scales across animation frames so their magnitudes can be compared.",
+            "animation_mode": "Sweep frequency while holding phase fixed, or cycle phase at the selected frequency. Phase animation requires paired inputs.",
+            "phase_steps": "Number of frames in one complete 360-degree phase cycle. More frames produce smaller phase steps.",
+            "phase": "Phase angle in degrees held during a frequency sweep, or used as the starting angle for a phase cycle.",
+            "fps": "Requested animation frames per second. Rendering large fields can reduce the achieved playback rate.",
+            "loop": "Restart the animation after the last frequency or phase frame.",
+            "play": "Start or pause animation using the cached results and current sweep settings.",
+            "step": "Pause playback and advance one frequency or phase frame.",
+            "spectrogram_button": "Compute a time-frequency spectrogram for the selected acquired shot using the Spectrogram tab settings and analysis interval.",
+            "cancel_button": "Request cancellation of the current processing job.",
+        }
+        for name, tip in tips.items():
+            getattr(self, name).setToolTip(tip)
+        for name, tip in {
+            "start": "Analysis start time in milliseconds, inclusive; snaps to the nearest stored sample.",
+            "stop": "Analysis end time in milliseconds, inclusive; snaps to the nearest stored sample.",
+            "first": "First sample included in the analysis interval, using zero-based indices.",
+            "last": "Last sample included in the analysis interval, inclusive and zero-based.",
+        }.items():
+            getattr(self.editor, name).setToolTip(tip)
+        picker = self.trace_picker
+        for dim, widget in picker.indices.items():
+            widget.setToolTip(f"Zero-based {dim} index of the stored trace to preview or process.")
+        picker.global_shot.setToolTip("Select a trace by its original global acquisition shot number. The number must identify exactly one stored trace.")
+        picker.cycle_axis.setToolTip("Choose which trace indices Previous and Next advance; other indices stay fixed.")
+        picker.previous.setToolTip("Select the previous trace, location, shot, or case in the chosen cycle.")
+        picker.next.setToolTip("Select the next trace, location, shot, or case in the chosen cycle.")
+        picker.wrap.setToolTip("Continue from the opposite end when Previous or Next reaches the first or last item.")
+        for button, tip in zip(self.action_buttons[:4], (
+            "Estimate spectra and covariance at the selected position/case and shot, or across matched shots when shot averaging is enabled.",
+            "Estimate spectra and covariance for all stored positions/cases and shots, using the current interval and estimator settings.",
+            "Restore automatic plot limits for the current results.",
+            "Close spectral analysis and return to the main data browser.",
+        )):
+            button.setToolTip(tip)
 
     def plot_tab(self, title):
         panel = W.QWidget()

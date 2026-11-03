@@ -141,6 +141,38 @@ class Controls(W.QWidget):
         self.update_window_parameter()
         self.update_display_controls()
         self.update_resolution()
+        self.set_input_tooltips()
+
+    def set_input_tooltips(self):
+        tips = {
+            "nperseg": "Samples in each moving FFT window. Longer windows improve frequency resolution while reducing time localization. Must fit inside the analysis interval.",
+            "overlap": "Samples shared by neighboring windows. Must be less than Segment samples; more overlap gives closer time columns.",
+            "overlap_percent": "Overlap as a percentage of the segment length. Converted to a whole number of overlapping samples; must remain below 100%.",
+            "nfft": "FFT length, at least the segment length. Extra samples provide zero padding and finer frequency bins, without improving intrinsic resolution.",
+            "fft_workers": "Maximum FFT threads. One uses serial FFTs; more workers can help large jobs but add overhead to small jobs.",
+            "window": "Taper applied to each moving segment to control spectral leakage. Some windows expose an additional shape parameter.",
+            "window_parameter": "Shape parameter for the selected window. The field label identifies the parameter; this control appears only for windows that require it.",
+            "symmetric_window": "Use a symmetric taper intended for filter design. Unchecked uses a periodic taper, the usual choice for spectral analysis.",
+            "detrend": "Remove the mean (constant), a fitted straight line (linear), or nothing (none) from each moving window before its FFT.",
+            "sides": "Show nonnegative frequencies with one-sided power scaling, or both negative and positive frequencies centered on zero.",
+            "boundary": "Extend the selected interval at its edges using the chosen rule, or use only complete windows inside the interval when no extension is selected.",
+            "auto_update": "Recompute the spectrogram after selecting a trace or changing estimation settings, once a spectrogram has been requested.",
+            "quantity": "Show the selected shot's A or B auto-power, or complex cross-power conj(A) × B. Cross-power alone does not measure coherence.",
+            "representation": "Choose how complex cross-power is displayed: magnitude, phase, real part, imaginary part, or magnitude squared.",
+            "degrees": "Display cross-phase in degrees when checked, or radians when unchecked.",
+            "color_scale": "Map values to colors using decibels, linear values, positive logarithmic scaling, or symmetric logarithmic scaling for signed values.",
+            "reference": "Positive reference value for the dB conversion, in the units of the displayed quantity. A value equal to this reference is 0 dB.",
+            "dynamic_range": "Displayed dB span below the peak in the visible frequency range when automatic color limits are enabled.",
+            "linthresh": "Positive threshold around zero where symmetric-log color scaling is linear. Values outside this region use logarithmic scaling.",
+            "auto_color": "Derive color limits from the displayed frequency range. Uncheck to enter fixed minimum and maximum values.",
+            "color_min": "Lower color limit in displayed units, or dB when using the dB scale. Available when automatic color limits are off.",
+            "color_max": "Upper color limit in displayed units, or dB when using the dB scale. Must exceed the color minimum.",
+            "frequency_min": "Lowest displayed frequency in Hz. Must be below the maximum and include at least one computed bin.",
+            "frequency_max": "Highest displayed frequency in Hz. Must exceed the frequency minimum.",
+            "log_frequency": "Use logarithmic spacing on the frequency axis. Requires a one-sided spectrum; zero frequency is excluded.",
+        }
+        for name, tip in tips.items():
+            getattr(self, name).setToolTip(tip)
 
     def settings(self, interval):
         return analysis.Settings(interval=interval, nperseg=self.nperseg.value(), overlap=self.overlap.value(),
