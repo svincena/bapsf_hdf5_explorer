@@ -19,6 +19,7 @@ class TracePicker(W.QWidget):
         for d in data.dims[:-1]:
             widget = spin(0, len(data.coords[d])-1, min(selection.get(d, 0), len(data.coords[d])-1))
             self.indices[d] = widget
+            widget.setToolTip(f"Zero-based {d} index of the stored trace to preview or process.")
             form.addRow(f"{d} index", widget)
             widget.valueChanged.connect(self.index_changed)
             if d in data.spatial_dims:
@@ -37,6 +38,7 @@ class TracePicker(W.QWidget):
         form.addRow("Flat trace index", self.flat_index)
         self.flat_index.valueChanged.connect(self.choose_flat)
         self.global_shot = numeric_edit()
+        self.global_shot.setToolTip("Select by original global acquisition shot number. The number must identify exactly one stored trace.")
         self.global_shot.setParent(self)
         if data.shot_numbers is not None:
             form.addRow("Global shot number", self.global_shot)
@@ -54,11 +56,15 @@ class TracePicker(W.QWidget):
         row.addWidget(W.QLabel("Cycle through"))
         row.addWidget(self.cycle_axis)
         self.previous, self.next = W.QPushButton("← Previous"), W.QPushButton("Next →")
+        self.cycle_axis.setToolTip("Choose which indices Previous and Next advance; other indices stay fixed.")
+        self.previous.setToolTip("Select the previous item in the chosen trace, location, shot or case cycle.")
+        self.next.setToolTip("Select the next item in the chosen trace, location, shot or case cycle.")
         self.previous.clicked.connect(lambda: self.cycle(-1))
         self.next.clicked.connect(lambda: self.cycle(1))
         row.addWidget(self.previous)
         row.addWidget(self.next)
         self.wrap = W.QCheckBox("Wrap at the first / last item")
+        self.wrap.setToolTip("Continue from the opposite end when navigation reaches the first or last item.")
         self.wrap.setChecked(True)
         row.addWidget(self.wrap)
         self.navigation_location = W.QLabel()

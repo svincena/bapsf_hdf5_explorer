@@ -81,6 +81,16 @@ class MainWindow(W.QMainWindow):
                                ("Save data…", self.save_data)]:
             action = self.actions_toolbar.addAction(text)
             action.triggered.connect(callback)
+            action.setToolTip({
+                "Open HDF5…": "Open an HDF5 acquisition or a saved Explorer dataset.",
+                "Demo": "Replace the current data with the built-in demonstration dataset.",
+                "Run info": "View acquisition metadata and the current processing history.",
+                "Langmuir…": "Analyze probe voltage and current sweeps from the original imported data.",
+                "Spectral Analysis…": "Estimate spectra, covariance and spectrograms from the currently processed channels.",
+                "Save image…": "Save the current plot to an image file.",
+                "Export MP4…": "Export the selected inclusive frame range as a movie using the frame stride and FPS settings.",
+                "Save data…": "Save the currently processed data, coordinates, metadata and history as an Explorer HDF5 file.",
+            }[text])
         actions_row = W.QHBoxLayout()
         actions_row.addWidget(self.actions_toolbar)
         mode_label = W.QLabel("Mode")
@@ -168,8 +178,10 @@ class MainWindow(W.QMainWindow):
         apply = W.QPushButton("Apply to original data")
         apply.setObjectName("primary")
         apply.clicked.connect(self.apply_processing)
+        apply.setToolTip("Rebuild processed data from the imported original using the selected preprocessing settings.")
         reset = W.QPushButton("Reset processing")
         reset.clicked.connect(self.reset_processing)
+        reset.setToolTip("Restore the imported data and clear preprocessing selections.")
         pf.addRow(apply)
         pf.addRow(reset)
         self.history = W.QLabel("Original data")
@@ -257,6 +269,34 @@ class MainWindow(W.QMainWindow):
         self.fps.valueChanged.connect(lambda n: self.timer.setInterval(round(1000/n)))
         self.appearance.currentTextChanged.connect(self.change_appearance)
         self.set_data(demo())
+        for name, tip in {
+            "mode": "Scalar shows the first component; Absolute shows its absolute value; Magnitude combines selected components; Vector draws arrows on a spatial plane.",
+            "lock": "Use a common automatic scale across time so frame magnitudes can be compared.",
+            "average": "Average stored repeats along the shot axis when applying preprocessing.",
+            "baseline": "Remove each trace's mean or fitted linear trend before optional integration.",
+            "integrate": "Cumulatively integrate each trace over time after baseline removal. The signal units gain a factor of seconds.",
+            "gain": "Multiply each processed trace by this factor. Decimal and scientific notation are accepted.",
+            "case": "Zero-based case index to display.",
+            "shot": "Zero-based stored repeat index to display; distinct from the original global shot number.",
+            "time_unit": "Time units used in plot labels and the current time readout.",
+            "sigfigs": "Number of significant figures in the current time readout.",
+            "fps": "Requested frames per second for playback and exported movies.",
+            "frame_step": "Advance by this many stored time samples during playback and movie export.",
+            "export_start": "First time frame included in movie export, inclusive and zero-based.",
+            "export_stop": "Last time frame included in movie export, inclusive and zero-based.",
+            "play": "Start or pause time playback at the selected frame.",
+            "slider": "Select the displayed time frame.",
+            "frame": "Zero-based time frame index to display.",
+        }.items():
+            getattr(self, name).setToolTip(tip)
+        for widget, tip in zip(self.components, (
+            "Channel used for scalar display or the horizontal vector component.",
+            "Optional second channel, used for magnitude or the vertical vector component.",
+            "Optional third channel contributing to magnitude; arrows use the first two components.",
+        )):
+            widget.setToolTip(tip)
+        for widget in self.slice_boxes:
+            widget.setToolTip("Zero-based spatial index at which to take the linked slice. Click the main spatial plot to move the slices.")
 
     def change_appearance(self, appearance):
         apply_appearance(W.QApplication.instance(), appearance)
@@ -310,6 +350,7 @@ class MainWindow(W.QMainWindow):
                                          history=self.data.history, metadata=metadata), indent=2, default=str))
         layout.addWidget(text)
         buttons = W.QDialogButtonBox(W.QDialogButtonBox.Close)
+        buttons.button(W.QDialogButtonBox.Close).setToolTip("Close the acquisition metadata and processing history viewer.")
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)
         dialog.exec()
@@ -353,7 +394,7 @@ class MainWindow(W.QMainWindow):
         self.integrate.setChecked(False)
         self.smooth.setChecked(False)
         self.smoothing_settings = dict(DEFAULT_SMOOTHING)
-        self.smooth_button.setToolTip("")
+        self.smooth_button.setToolTip("Configure the temporal filter; apply preprocessing to update the data.")
         self.reset_spatial_averaging()
         self.gain.setText("1")
         self.mode.blockSignals(True)
@@ -466,7 +507,7 @@ class MainWindow(W.QMainWindow):
         dialog = SmoothingDialog(self.smoothing_settings, self.raw.coords["time"], self)
         if dialog.exec() == W.QDialog.Accepted:
             self.smoothing_settings.update(dialog.settings())
-            self.smooth_button.setToolTip(str(dialog.settings()))
+            self.smooth_button.setToolTip("Configure the temporal filter; apply preprocessing to update the data.\nCurrent settings: " + str(dialog.settings()))
 
     def apply_processing(self):
         try:
@@ -487,12 +528,12 @@ class MainWindow(W.QMainWindow):
         dialog = SpatialAveragingDialog(self.spatial_settings, self.raw.spatial_dims, self)
         if dialog.exec() == W.QDialog.Accepted:
             self.spatial_settings.update(dialog.settings())
-            self.spatial_button.setToolTip(str(dialog.settings()))
+            self.spatial_button.setToolTip("Configure the spatial neighborhood filter; apply preprocessing to update the data.\nCurrent settings: " + str(dialog.settings()))
 
     def reset_spatial_averaging(self):
         self.spatial_average.setChecked(False)
         self.spatial_settings = dict(DEFAULT_SPATIAL_AVERAGING)
-        self.spatial_button.setToolTip("")
+        self.spatial_button.setToolTip("Configure the spatial neighborhood filter; apply preprocessing to update the data.")
 
     def reset_processing(self):
         self.average.setChecked(False)
@@ -500,7 +541,7 @@ class MainWindow(W.QMainWindow):
         self.integrate.setChecked(False)
         self.smooth.setChecked(False)
         self.smoothing_settings = dict(DEFAULT_SMOOTHING)
-        self.smooth_button.setToolTip("")
+        self.smooth_button.setToolTip("Configure the temporal filter; apply preprocessing to update the data.")
         self.reset_spatial_averaging()
         self.gain.setText("1")
         self.processed(self.raw)

@@ -327,21 +327,6 @@ class SpectralDialog(W.QDialog):
         }
         for name, tip in tips.items():
             getattr(self, name).setToolTip(tip)
-        for name, tip in {
-            "start": "Analysis start time in milliseconds, inclusive; snaps to the nearest stored sample.",
-            "stop": "Analysis end time in milliseconds, inclusive; snaps to the nearest stored sample.",
-            "first": "First sample included in the analysis interval, using zero-based indices.",
-            "last": "Last sample included in the analysis interval, inclusive and zero-based.",
-        }.items():
-            getattr(self.editor, name).setToolTip(tip)
-        picker = self.trace_picker
-        for dim, widget in picker.indices.items():
-            widget.setToolTip(f"Zero-based {dim} index of the stored trace to preview or process.")
-        picker.global_shot.setToolTip("Select a trace by its original global acquisition shot number. The number must identify exactly one stored trace.")
-        picker.cycle_axis.setToolTip("Choose which trace indices Previous and Next advance; other indices stay fixed.")
-        picker.previous.setToolTip("Select the previous trace, location, shot, or case in the chosen cycle.")
-        picker.next.setToolTip("Select the next trace, location, shot, or case in the chosen cycle.")
-        picker.wrap.setToolTip("Continue from the opposite end when Previous or Next reaches the first or last item.")
         for button, tip in zip(self.action_buttons[:4], (
             "Estimate spectra and covariance at the selected position/case and shot, or across matched shots when shot averaging is enabled.",
             "Estimate spectra and covariance for all stored positions/cases and shots, using the current interval and estimator settings.",

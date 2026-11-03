@@ -20,6 +20,10 @@ class IntervalEditor(W.QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         self.start, self.stop = ScientificDoubleSpinBox(), ScientificDoubleSpinBox()
         self.first, self.last = spin(0, len(time)-1), spin(0, len(time)-1)
+        self.start.setToolTip("Inclusive interval start in milliseconds; snaps to the nearest stored sample. Scientific notation is accepted.")
+        self.stop.setToolTip("Inclusive interval end in milliseconds; snaps to the nearest stored sample. Scientific notation is accepted.")
+        self.first.setToolTip("First sample included in the interval, using zero-based indices.")
+        self.last.setToolTip("Last sample included in the interval, inclusive and zero-based.")
         for box in (self.start, self.stop):
             box.setDecimals(9)
             box.setRange(time[0]*1e3, time[-1]*1e3)
@@ -181,6 +185,8 @@ class OffsetDialog(W.QDialog):
         self.mode = combo(["None", "Recorded interval", "Constant"])
         self.mode.setCurrentText(settings.offset_mode)
         self.constant = numeric_edit(str(settings.offset_volts))
+        self.mode.setToolTip("Use no correction, subtract each shot's mean over a recorded zero-current interval, or subtract a constant digitizer voltage.")
+        self.constant.setToolTip("Instrumental current-channel offset in digitizer volts, subtracted before attenuation, resistance and polarity conversion.")
         form = form_layout()
         form.addRow("Correction", self.mode)
         form.addRow("Constant (digitizer V)", self.constant)
@@ -199,6 +205,8 @@ class OffsetDialog(W.QDialog):
         self.message.setWordWrap(True)
         layout.addWidget(self.message)
         buttons = W.QDialogButtonBox(W.QDialogButtonBox.Ok | W.QDialogButtonBox.Cancel)
+        buttons.button(W.QDialogButtonBox.Ok).setToolTip("Keep the current offset method, constant and selected zero-current interval.")
+        buttons.button(W.QDialogButtonBox.Cancel).setToolTip("Close without changing the current offset settings.")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -378,6 +386,46 @@ class LangmuirDialog(W.QDialog):
         self.settings.interval = self.editor.interval()
         self.selection_changed()
         self.trace_view.toolbar.push_current()
+        for name, tip in {
+            "voltage": "Digitizer voltage channel containing the probe bias sweep, before the attenuation multiplier.",
+            "current": "Digitizer voltage channel measured across the current-sensing resistor.",
+            "invert": "Reverse current polarity so collected electron current is positive for the fit.",
+            "ideal": "Require consistency with the ideal planar Maxwellian probe model when accepting derived plasma quantities.",
+            "quantity": "Choose a derived quantity from the cached Langmuir results. Failed fits remain missing.",
+            "cancel_button": "Request cancellation of the active Langmuir processing job.",
+        }.items():
+            getattr(self, name).setToolTip(tip)
+        offset.setToolTip("Choose a recorded zero-current interval or constant instrumental offset; do not zero the ion-saturation branch.")
+        for dim, widget in self.indices.items():
+            widget.setToolTip(f"Zero-based {dim} index of the representative sweep to preview and process.")
+        for name, tip in {
+            "voltage_factor": "Multiplier converting recorded sweep volts to probe bias volts. Must be positive.",
+            "current_factor": "Multiplier restoring attenuated current-channel voltage before dividing by the sensing resistance. Must be positive.",
+            "resistance": "Positive current-sensing resistance in ohms, used to convert corrected voltage to amperes.",
+            "area_mm2": "Positive probe collection area in square millimeters, used for density estimates.",
+        }.items():
+            self.fields[name].setToolTip(tip)
+        for name, tip in {
+            "voltage_bin_width": "Width in volts used to combine sweep samples into voltage bins before fitting.",
+            "vp_smoothing_width_V": "Voltage width used to smooth the current curve when locating plasma potential from its derivative.",
+            "te_min_eV": "Lowest accepted electron temperature in electronvolts.",
+            "te_max_eV": "Highest accepted electron temperature in electronvolts; must exceed the minimum.",
+            "te_min_r2": "Minimum accepted R-squared for the electron-temperature fit, between zero and one.",
+            "te_margin_from_vp": "Exclude fit points closer than this voltage below the estimated plasma potential.",
+            "te_current_floor_frac": "Minimum electron current for temperature fitting, expressed as a fraction of the electron saturation current.",
+            "te_min_points": "Minimum number of voltage-bin points required in an electron-temperature fit.",
+            "ion_min_snr": "Minimum ion-current signal-to-noise ratio required for an accepted ion estimate.",
+            "vp_smoothing": "Smooth the curve used for plasma-potential detection with Savitzky–Golay, a moving average, or no smoothing.",
+            "ies_method": "Estimate electron saturation current from the high-bias median or from the current at plasma potential.",
+        }.items():
+            self.fit_fields[name].setToolTip(tip)
+        for button, tip in zip(self.action_buttons, (
+            "Analyze the selected stored sweep using the current calibration, interval and fitting settings.",
+            "Analyze every stored sweep using the current calibration, interval and fitting settings.",
+            "Restore the trace and result plot views.",
+            "Return to the main data browser.",
+        )):
+            button.setToolTip(tip)
 
     def index(self):
         return tuple(w.value() for w in self.indices.values())

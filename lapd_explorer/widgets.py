@@ -318,6 +318,8 @@ class ImportDialog(W.QDialog):
         add, remove = W.QPushButton("+ Axis"), W.QPushButton("Remove axis")
         add.clicked.connect(self.add_axis)
         remove.clicked.connect(self.remove_axis)
+        add.setToolTip("Add a manual dimension in slowest-to-fastest storage order.")
+        remove.setToolTip("Remove the selected manual dimension, or the last dimension if none is selected.")
         row.addWidget(add)
         row.addWidget(remove)
         row.addStretch()
@@ -367,6 +369,25 @@ class ImportDialog(W.QDialog):
         self.tabs.currentChanged.connect(self.update_mapping_fields)
         self.update_mapping_fields()
         C.QTimer.singleShot(0, self.request_guess)
+        for name, tip in {
+            "channels": "Select one to three compatible digitizer channels. Use Command-click on macOS or Ctrl-click on Windows/Linux for multiple selections.",
+            "motion": "Motion device and configuration used to associate acquired records with spatial positions.",
+            "mapping": "Use recorded motion coordinates or describe the stored dimensions manually.",
+            "position_source": "Use commanded target coordinates when available, or use measured probe positions.",
+            "cases": "Number of distinct cases at each spatial point. Together with shots per case, this must match the selected records.",
+            "repeats": "Stored shots per case at each spatial point. Initially inferred from record counts and motion metadata; editable before import.",
+            "precision": "Decimal places used when rounding motion coordinates to identify repeated spatial positions.",
+            "raw_paths": "Select one to three numeric HDF5 datasets for uncalibrated raw import. Use Command-click or Ctrl-click for multiple selections.",
+            "dt": "Time between original samples in seconds for raw HDF5 import. Must be positive; scientific notation is accepted.",
+            "raw_units": "Units assigned to the raw signal values; raw import does not apply ADC calibration.",
+            "time_range_mode": "Import the full trace, an inclusive range of original sample indices, or an inclusive time range in seconds.",
+            "downsampling": "Choose whether to keep every Nth sample directly or apply anti-alias filtering before reducing the sample rate.",
+            "preview_button": "Read one trace to preview the signal and choose temporal import limits before loading the full acquisition.",
+            "axes": "Describe manual dimensions in storage order, slowest first. Size is the number of entries; Start and End set the coordinate endpoints.",
+            "load": "Read the selected channels and records using the current mapping and temporal settings.",
+            "cancel_button": "Cancel the import and close this window once any active reads have stopped.",
+        }.items():
+            getattr(self, name).setToolTip(tip)
 
     def show_description(self):
         dialog = W.QDialog(self)
@@ -385,6 +406,7 @@ class ImportDialog(W.QDialog):
         text.setPlainText("\n\n".join(sections) or "No HDF5 description is available in this file.")
         layout.addWidget(text)
         buttons = W.QDialogButtonBox(W.QDialogButtonBox.Close)
+        buttons.button(W.QDialogButtonBox.Close).setToolTip("Close the description viewer and return to acquisition import.")
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)
         dialog.exec()
@@ -574,8 +596,14 @@ class ImportDialog(W.QDialog):
             return
         self.axes.insertRow(row)
         self.axes.setCellWidget(row, 0, combo(["x", "y", "z", "case", "shot"]))
+        self.axes.cellWidget(row, 0).setToolTip("Dimension represented by this raw storage axis. Each dimension may appear only once.")
         for col, value in enumerate(["1", "0", "0"], start=1):
             self.axes.setItem(row, col, W.QTableWidgetItem(value))
+            self.axes.item(row, col).setToolTip({
+                1: "Positive integer dimension size. All sizes must multiply to the stored record count.",
+                2: "Coordinate at the first entry of this dimension.",
+                3: "Coordinate at the last entry; coordinates are evenly spaced between Start and End.",
+            }[col])
         self.update_axes_height()
 
     def remove_axis(self):
@@ -723,9 +751,12 @@ class SliceAxisControls(W.QGroupBox):
         self._limits = (-1., 1.)
         layout = W.QVBoxLayout(self)
         self.mode = combo(list(self.MODES))
+        self.mode.setToolTip("Choose limits from all times, enter fixed manual limits, or adjust the slice axis interactively with the plot toolbar.")
         layout.addWidget(self.mode)
         form = form_layout()
         self.minimum, self.maximum = numeric_edit("-1"), numeric_edit("1")
+        self.minimum.setToolTip("Lower vertical limit in displayed signal units. Must be finite and below Max.")
+        self.maximum.setToolTip("Upper vertical limit in displayed signal units. Must be finite and above Min.")
         form.addRow("Min", self.minimum)
         form.addRow("Max", self.maximum)
         layout.addLayout(form)
@@ -787,6 +818,9 @@ class ColormapRangeControls(SliceAxisControls):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setTitle("Mesh colormap range")
+        self.mode.setToolTip("Use automatic color limits or enter a fixed range in displayed signal units.")
+        self.minimum.setToolTip("Lower mesh color limit in displayed signal units. Must be finite and below Max.")
+        self.maximum.setToolTip("Upper mesh color limit in displayed signal units. Must be finite and above Min.")
 
     def mode_changed(self):
         manual = self.mode.currentText() == "Manual"
@@ -813,6 +847,7 @@ class VectorArrowControls(W.QWidget):
         layout.setSpacing(4)
         self.toggle = W.QToolButton()
         self.toggle.setText("Arrow style")
+        self.toggle.setToolTip("Expand or collapse vector arrow appearance settings.")
         self.toggle.setCheckable(True)
         self.toggle.setToolButtonStyle(C.Qt.ToolButtonTextBesideIcon)
         self.toggle.setArrowType(C.Qt.RightArrow)
@@ -851,6 +886,7 @@ class VectorArrowControls(W.QWidget):
         form.addRow("Pivot", self.pivot)
         self.pivot.currentIndexChanged.connect(self.changed)
         reset = W.QPushButton("Reset arrow style")
+        reset.setToolTip("Restore default arrow thickness, length, head shape, opacity, outline and grid sampling.")
         reset.clicked.connect(self.reset)
         form.addRow(reset)
         self.panel.hide()
@@ -897,19 +933,25 @@ class SpatialAveragingDialog(W.QDialog):
         layout.addLayout(self.form)
         self.method = combo(list(self.METHODS))
         self.method.setCurrentIndex(list(self.METHODS.values()).index(settings["method"]))
+        self.method.setToolTip("Choose a box, Gaussian, disk or median neighborhood filter for each spatial plane.")
         self.form.addRow("Method", self.method)
         self.windows = [spin(1, 101, v) for v in settings["window_size"]]
         self.sigmas = [numeric_edit(str(v)) for v in settings["sigma"]]
         for dim, window, sigma in zip(spatial_dims, self.windows, self.sigmas):
+            window.setToolTip(f"Odd number of grid points in the {dim} neighborhood; 1 leaves this direction unaveraged.")
+            sigma.setToolTip(f"Positive Gaussian standard deviation along {dim}, in grid points. The filter extends to approximately four standard deviations.")
             window.setSingleStep(2)
             self.form.addRow(f"{dim} window (odd grid points)", window)
             self.form.addRow(f"{dim} Gaussian σ (grid points)", sigma)
         self.radius = spin(1, 50, settings["radius"])
+        self.radius.setToolTip("Radius of the equally weighted circular neighborhood in grid points.")
         self.form.addRow("Disk radius (grid points)", self.radius)
         self.boundary = combo(list(self.MODES))
+        self.boundary.setToolTip("Handle neighbors beyond the plane by reflecting the data, repeating the nearest edge, or wrapping periodically.")
         self.boundary.setCurrentIndex(list(self.MODES.values()).index(settings["mode"]))
         self.form.addRow("Boundary", self.boundary)
         self.missing = combo(list(self.MISSING))
+        self.missing.setToolTip("Propagate missing values to affected neighborhoods, or average finite neighbors only. Empty neighborhoods remain missing.")
         self.missing.setCurrentIndex(list(self.MISSING.values()).index(settings["nan_policy"]))
         self.form.addRow("Missing values", self.missing)
         hint = W.QLabel("Box and disk averages weight neighbors equally. Gaussian weights decrease with distance (support ±4σ). Median rejects isolated spikes. Propagate marks any neighborhood containing missing data as missing; omit uses finite neighbors and can fill gaps. Empty neighborhoods remain missing. Changes take effect with Apply to original data.")
@@ -919,6 +961,8 @@ class SpatialAveragingDialog(W.QDialog):
         self.error_label.setWordWrap(True)
         layout.addWidget(self.error_label)
         buttons = W.QDialogButtonBox(W.QDialogButtonBox.Ok | W.QDialogButtonBox.Cancel)
+        buttons.button(W.QDialogButtonBox.Ok).setToolTip("Keep these spatial filter settings. Apply to original data in the main window to update the data.")
+        buttons.button(W.QDialogButtonBox.Cancel).setToolTip("Discard edits to the spatial filter settings.")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -1000,6 +1044,17 @@ class SmoothingDialog(W.QDialog):
             self.form.addRow(label, self.fields[key])
         self.fields["nan_policy"].setToolTip("propagate: missing values spread through the filter. interp: interpolate gaps, extend endpoints; entirely missing traces stay NaN.")
         self.fields["mode"].setToolTip("constant pads with zero; nearest extends endpoints; reflect/mirror reflect edges; wrap assumes periodic data.")
+        self.method.setToolTip("Choose a moving average, Savitzky–Golay polynomial smoother, Gaussian smoother, or zero-phase Butterworth frequency filter.")
+        for name, tip in {
+            "window_size": "Filter width in samples. Savitzky–Golay requires an odd window no longer than the trace and larger than the polynomial order.",
+            "polyorder": "Degree of the local Savitzky–Golay polynomial. Must be smaller than the window length.",
+            "sigma": "Positive Gaussian standard deviation in samples; its duration depends on the trace sampling interval.",
+            "butter_type": "Keep frequencies below a cutoff, above a cutoff, or between two cutoffs.",
+            "cutoff": "Cutoff frequency in Hz, or lower cutoff for a band-pass filter. Must lie strictly between zero and Nyquist.",
+            "cutoff_upper": "Upper band-pass cutoff in Hz. Must exceed the lower cutoff and remain below Nyquist.",
+            "butter_order": "Butterworth design order. Higher orders sharpen the transition; band-pass design doubles this order and filtering uses forward/backward passes.",
+        }.items():
+            self.fields[name].setToolTip(tip)
         self.hint = W.QLabel()
         self.hint.setWordWrap(True)
         layout.addWidget(self.hint)
@@ -1007,6 +1062,8 @@ class SmoothingDialog(W.QDialog):
         self.error_label.setWordWrap(True)
         layout.addWidget(self.error_label)
         buttons = W.QDialogButtonBox(W.QDialogButtonBox.Ok | W.QDialogButtonBox.Cancel)
+        buttons.button(W.QDialogButtonBox.Ok).setToolTip("Keep these temporal filter settings. Apply to original data in the main window to update the data.")
+        buttons.button(W.QDialogButtonBox.Cancel).setToolTip("Discard edits to the temporal filter settings.")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
